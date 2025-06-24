@@ -80,6 +80,10 @@ function App() {
   // Estados para el editor WYSIWYG
   const [editorContent, setEditorContent] = useState('');
   const [isEditing, setIsEditing] = useState(false);
+  
+  // Estados para los datos de portada
+  const [coverTemplateFields, setCoverTemplateFields] = useState([]);
+  const [coverMappedData, setCoverMappedData] = useState(null);
 
   useEffect(() => {
     const loadProcesses = async () => {
@@ -200,19 +204,59 @@ function App() {
     setMappedData(prev => ({ ...prev, [e.target.name]: e.target.value }));
   };
 
+  const handleCoverMappedDataChange = (e) => {
+    setCoverMappedData(prev => ({ ...prev, [e.target.name]: e.target.value }));
+  };
+
   const handleProcessSelect = async (process) => {
+    console.log('[React] Proceso seleccionado:', process);
     setSelectedProcess(process);
     setDetailTab(0);
-    setTemplateFields([]); 
     setMappedData(null); // Limpiamos los datos anteriores
-
-    // Usamos el nombre del cliente para buscar su plantilla
+    setCoverMappedData(null); // Limpiamos los datos de portada anteriores
+    setTemplateFields([]); // Limpiamos los campos anteriores
+    setCoverTemplateFields([]); // Limpiamos los campos de portada anteriores
+    
     if (process.cliente?.razon) {
-      // Obtenemos tanto los campos requeridos como los datos ya mapeados
+      console.log('[React] Cargando datos para cliente:', process.cliente.razon);
+      
+      // Obtenemos tanto los campos requeridos como los datos ya mapeados para demanda
       const fields = await window.electronAPI.app.getTemplateFields(process.cliente.razon);
       const data = await window.electronAPI.app.getProcessMappedData(process);
+      console.log('[React] Campos de DEMANDA obtenidos:', fields);
+      console.log('[React] Datos de DEMANDA obtenidos:', data);
       setTemplateFields(fields);
       setMappedData(data);
+      
+      // Obtenemos también los campos y datos para portada
+      const coverFields = await window.electronAPI.app.getCoverTemplateFields(process.cliente.razon);
+      const coverData = await window.electronAPI.app.getProcessCoverMappedData(process);
+      console.log('[React] Campos de PORTADA obtenidos:', coverFields);
+      console.log('[React] Datos de PORTADA obtenidos:', coverData);
+      setCoverTemplateFields(coverFields);
+      setCoverMappedData(coverData);
+      
+      // Verificación de seguridad - si los campos son iguales, algo está mal
+      if (JSON.stringify(fields) === JSON.stringify(coverFields)) {
+        console.error('[React] ERROR: Los campos de demanda y portada son idénticos!');
+        console.error('[React] Campos demanda:', fields);
+        console.error('[React] Campos portada:', coverFields);
+        
+        // Forzar campos básicos de portada como fallback
+        const basicCoverFields = ['JUZGADO', 'DOMICILIO', 'CUANTIA', 'DEMANDADO_1', 'DEMANDADO_2'];
+        console.log('[React] Forzando campos básicos de portada:', basicCoverFields);
+        setCoverTemplateFields(basicCoverFields);
+        
+        // Crear datos básicos de portada
+        const basicCoverData = {
+          'JUZGADO': data.JUZGADO || 'Juzgado Civil Municipal',
+          'DOMICILIO': data.DOMICILIO || 'Bogotá D.C.',
+          'CUANTIA': data.CUANTIA || 'MÍNIMA',
+          'DEMANDADO_1': data.DEMANDADO_1 || data.DEMANDADO || '',
+          'DEMANDADO_2': data.DEMANDADO_2 || ''
+        };
+        setCoverMappedData(basicCoverData);
+      }
     }
     
     setScreen('processDetail');
@@ -323,6 +367,9 @@ function App() {
               <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
                 Estos son los campos que se usarán para rellenar la plantilla. Los datos extraídos del pagaré y otros documentos se muestran aquí. Puedes editarlos antes de continuar.
               </Typography>
+              <Typography variant="caption" color="primary" sx={{ display: 'block', mb: 1 }}>
+                DEBUG: Campos de demanda ({templateFields.length}): {templateFields.join(', ')}
+              </Typography>
               
               {mappedData ? (
                <Grid container spacing={2}>
@@ -334,7 +381,7 @@ function App() {
                         label={field}
                         name={field}
                         value={mappedData[field] || ''}
-                        onChange={handleDataChange}
+                        onChange={handleMappedDataChange}
                      />
                    </Grid>
                   ))}
@@ -350,7 +397,47 @@ function App() {
           {/* Panel Pestaña 2: Datos Portada */}
           {detailTab === 1 && (
             <Box sx={{ p: 3 }}>
-              <Typography>Aquí irán los campos específicos para la portada.</Typography>
+              <Typography variant="h6" gutterBottom>Formulario de la Portada</Typography>
+              <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+                Estos son los campos que se usarán para rellenar la plantilla de portada. Los datos extraídos del proceso se muestran aquí. Puedes editarlos antes de continuar.
+              </Typography>
+              <Typography variant="caption" color="secondary" sx={{ display: 'block', mb: 1 }}>
+                DEBUG: Campos de portada ({coverTemplateFields.length}): {coverTemplateFields.join(', ')}
+              </Typography>
+              
+              {coverMappedData ? (
+               <Grid container spacing={2}>
+                  {coverTemplateFields.map((field) => (
+                    <Grid item xs={12} sm={6} md={4} key={field}>
+                     <TextField
+                        fullWidth
+                        variant="outlined"
+                        label={field}
+                        name={field}
+                        value={coverMappedData[field] || ''}
+                        onChange={handleCoverMappedDataChange}
+                        sx={{
+                          '& .MuiOutlinedInput-root': {
+                            backgroundColor: 'rgba(76, 175, 80, 0.04)', // Verde claro para diferenciarlo de demanda
+                          }
+                        }}
+                     />
+                   </Grid>
+                  ))}
+               </Grid>
+              ) : (
+                <Typography variant="body2" color="text.secondary">
+                  Cargando datos de portada del proceso...
+                </Typography>
+              )}
+              
+              {coverTemplateFields.length === 0 && coverMappedData && (
+                <Box sx={{ mt: 2, p: 2, bgcolor: 'warning.light', borderRadius: 1 }}>
+                  <Typography variant="body2" color="warning.dark">
+                    ⚠️ No se encontró plantilla de portada específica para esta entidad.
+                  </Typography>
+                </Box>
+              )}
             </Box>
           )}
           

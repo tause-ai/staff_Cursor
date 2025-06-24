@@ -9,13 +9,21 @@ const electronAPI = {
     getProcesses: () => 
       ipcRenderer.invoke('app:getProcesses'),
       
-    // Obtener los campos de una plantilla
+    // Obtener los campos de una plantilla de demanda
     getTemplateFields: (entity) =>
       ipcRenderer.invoke('app:getTemplateFields', entity),
+      
+    // Obtener los campos de una plantilla de portada
+    getCoverTemplateFields: (entity) =>
+      ipcRenderer.invoke('app:getCoverTemplateFields', entity),
       
     // Obtener los datos de un proceso ya mapeados desde el backend
     getProcessMappedData: (proceso) =>
       ipcRenderer.invoke('app:getProcessMappedData', proceso),
+
+    // Obtener los datos de un proceso mapeados para portada
+    getProcessCoverMappedData: (proceso) =>
+      ipcRenderer.invoke('app:getProcessCoverMappedData', proceso),
 
     // Enviar un proceso para ser diligenciado
     diligenciarDemanda: (proceso) =>

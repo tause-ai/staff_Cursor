@@ -280,6 +280,125 @@ ipcMain.handle('app:getTemplateFields', async (event, clientName) => {
   }
 });
 
+// Obtener los campos de una plantilla de portada
+ipcMain.handle('app:getCoverTemplateFields', async (event, clientName) => {
+  console.log(`[getCoverTemplateFields] Buscando plantilla de portada para cliente: "${clientName}"`);
+  try {
+    if (!clientName) {
+      console.warn('[getCoverTemplateFields] Se recibió un nombre de cliente vacío.');
+      return [];
+    }
+    
+    // Normalizar el nombre del cliente para la búsqueda
+    const normalizedClientName = clientName.toLowerCase()
+      .replace(/\./g, '')
+      .replace(/\s+/g, '')
+      .replace(/[^a-z0-9]/g, '');
+    
+    console.log(`[getCoverTemplateFields] Nombre normalizado para búsqueda: "${normalizedClientName}"`);
+    
+    const coversDir = path.join(__dirname, 'formatos', 'Portadas');
+    const files = await fs.readdir(coversDir);
+    console.log(`[getCoverTemplateFields] Archivos disponibles en Portadas:`, files);
+
+    // Buscar archivo de portada - Búsqueda más flexible
+    let coverFile = null;
+    
+    // Estrategia 1: Buscar por nombre exacto normalizado
+    coverFile = files.find(file => {
+      const normalizedFileName = file.toLowerCase()
+        .replace(/\./g, '')
+        .replace(/\s+/g, '')
+        .replace(/[^a-z0-9]/g, '');
+      const normalizedSearch = normalizedClientName;
+      console.log(`[getCoverTemplateFields] Comparando: "${normalizedFileName}" contiene "portada"? ${normalizedFileName.includes('portada')} y "${normalizedSearch}"? ${normalizedFileName.includes(normalizedSearch)}`);
+      return normalizedFileName.includes('portada') && 
+             normalizedFileName.includes(normalizedSearch) && 
+             file.endsWith('.docx');
+    });
+    
+    console.log(`[getCoverTemplateFields] Búsqueda inicial resultado: ${coverFile || 'NO ENCONTRADO'}`);
+    
+    // Estrategia 2: Buscar por palabras clave más flexibles
+    if (!coverFile && clientName) {
+      console.log(`[getCoverTemplateFields] Intentando fallback con palabras clave...`);
+      const keywords = clientName.toLowerCase().split(/\s+/);
+      console.log(`[getCoverTemplateFields] Palabras clave: ${keywords.join(', ')}`);
+      
+      coverFile = files.find(file => {
+        const lowerFile = file.toLowerCase();
+        const hasPortada = lowerFile.includes('portada');
+        const hasKeyword = keywords.some(keyword => {
+          const match = keyword.length > 2 && lowerFile.includes(keyword.toLowerCase());
+          console.log(`[getCoverTemplateFields] Archivo "${file}" - palabra "${keyword}": ${match}`);
+          return match;
+        });
+        console.log(`[getCoverTemplateFields] Archivo "${file}" - tiene portada: ${hasPortada}, tiene keyword: ${hasKeyword}`);
+        return hasPortada && hasKeyword && file.endsWith('.docx');
+      });
+    }
+    
+    // Estrategia 3: Buscar por coincidencia parcial más amplia
+    if (!coverFile && clientName) {
+      console.log(`[getCoverTemplateFields] Intentando búsqueda parcial amplia...`);
+      coverFile = files.find(file => {
+        const lowerFile = file.toLowerCase();
+        const lowerClient = clientName.toLowerCase();
+        
+        // Buscar si cualquier parte del nombre del cliente aparece en el archivo
+        const hasPortada = lowerFile.includes('portada');
+        const hasPartialMatch = lowerClient.length >= 4 && lowerFile.includes(lowerClient.substring(0, 4));
+        
+        console.log(`[getCoverTemplateFields] Archivo "${file}" - búsqueda amplia - portada: ${hasPortada}, coincidencia parcial: ${hasPartialMatch}`);
+        return hasPortada && hasPartialMatch && file.endsWith('.docx');
+      });
+    }
+    
+    console.log(`[getCoverTemplateFields] Resultado final: ${coverFile || 'NO ENCONTRADO'}`);
+    
+    // Fallback final: usar cualquier portada disponible para debugging
+    if (!coverFile) {
+      console.warn(`[getCoverTemplateFields] No se encontró portada específica, usando primera disponible para debugging`);
+      coverFile = files.find(file => file.toLowerCase().includes('portada') && file.endsWith('.docx'));
+      console.log(`[getCoverTemplateFields] Fallback final: ${coverFile || 'NINGUNA PORTADA ENCONTRADA'}`);
+    }
+
+    if (!coverFile) {
+      console.warn(`[getCoverTemplateFields] No se encontró plantilla de portada para "${clientName}" en ${coversDir}`);
+      return []; // Devolvemos un array vacío si no hay plantilla
+    }
+    
+    console.log(`[getCoverTemplateFields] Plantilla de portada encontrada: "${coverFile}"`);
+
+    const coverPath = path.join(coversDir, coverFile);
+    const content = await fs.readFile(coverPath);
+    
+    const zip = new PizZip(content);
+    const doc = new Docxtemplater(zip, {
+      delimiters: {
+            start: '«',
+            end: '»'
+      },
+      paragraphsLoop: true,
+      linebreaks: true,
+      modules: [iModule]
+    });
+
+    doc.render(); // La inspección se ejecuta durante el render
+    const tags = iModule.getAllTags();
+    const tagNames = Object.keys(tags);
+    console.log(`[getCoverTemplateFields] Se encontraron ${tagNames.length} campos en portada:`, tagNames);
+    
+    // Devolvemos solo los nombres de las etiquetas (las llaves del objeto)
+    return tagNames;
+
+  } catch (error) {
+    console.error(`Error al obtener los campos de la plantilla de portada para "${clientName}":`, error);
+    dialog.showErrorBox('Error de Plantilla de Portada', `No se pudieron leer los campos de la plantilla de portada para ${clientName}. Verifique que el archivo no esté corrupto.`);
+    return []; // Devolver vacío en caso de error
+  }
+});
+
 // Mapear los datos de un proceso a los campos de la plantilla de forma dinámica
 ipcMain.handle('app:getProcessMappedData', async (event, process) => {
   console.log('[getProcessMappedData] Iniciando mapeo dinámico para el proceso:', process.proceso_id);
@@ -462,6 +581,189 @@ ipcMain.handle('app:getProcessMappedData', async (event, process) => {
 
   } catch (error) {
     console.error('[getProcessMappedData] Error al mapear los datos del proceso:', error);
+    return {};
+  }
+});
+
+// Mapear los datos de un proceso a los campos de la plantilla de portada
+ipcMain.handle('app:getProcessCoverMappedData', async (event, process) => {
+  console.log('[getProcessCoverMappedData] Iniciando mapeo de portada para el proceso:', process.proceso_id);
+  console.log('[getProcessCoverMappedData] Cliente:', process.cliente?.razon);
+  
+  try {
+    // 1. Obtener los campos requeridos por la plantilla de portada de esta entidad
+    const clientName = process.cliente?.razon || '';
+    let coverFields = [];
+    
+    // Obtener campos de la plantilla de portada
+    try {
+      if (clientName) {
+        const normalizedClientName = clientName.toLowerCase()
+          .replace(/\./g, '')
+          .replace(/\s+/g, '')
+          .replace(/[^a-z0-9]/g, '');
+        
+        const coversDir = path.join(__dirname, 'formatos', 'Portadas');
+        const files = await fs.readdir(coversDir);
+        
+        // Buscar archivo de portada - Búsqueda más flexible
+        let coverFile = null;
+        
+        // Estrategia 1: Buscar por nombre exacto normalizado
+        coverFile = files.find(file => {
+          const normalizedFileName = file.toLowerCase()
+            .replace(/\./g, '')
+            .replace(/\s+/g, '')
+            .replace(/[^a-z0-9]/g, '');
+          const normalizedSearch = normalizedClientName;
+          console.log(`[getProcessCoverMappedData] Comparando: "${normalizedFileName}" contiene "portada"? ${normalizedFileName.includes('portada')} y "${normalizedSearch}"? ${normalizedFileName.includes(normalizedSearch)}`);
+          return normalizedFileName.includes('portada') && 
+                 normalizedFileName.includes(normalizedSearch) && 
+                 file.endsWith('.docx');
+        });
+        
+        console.log(`[getProcessCoverMappedData] Búsqueda inicial resultado: ${coverFile || 'NO ENCONTRADO'}`);
+        
+        // Estrategia 2: Buscar por palabras clave más flexibles
+        if (!coverFile && clientName) {
+          console.log(`[getProcessCoverMappedData] Intentando fallback con palabras clave...`);
+          const keywords = clientName.toLowerCase().split(/\s+/);
+          console.log(`[getProcessCoverMappedData] Palabras clave: ${keywords.join(', ')}`);
+          
+          coverFile = files.find(file => {
+            const lowerFile = file.toLowerCase();
+            const hasPortada = lowerFile.includes('portada');
+            const hasKeyword = keywords.some(keyword => {
+              const match = keyword.length > 2 && lowerFile.includes(keyword.toLowerCase());
+              console.log(`[getProcessCoverMappedData] Archivo "${file}" - palabra "${keyword}": ${match}`);
+              return match;
+            });
+            console.log(`[getProcessCoverMappedData] Archivo "${file}" - tiene portada: ${hasPortada}, tiene keyword: ${hasKeyword}`);
+            return hasPortada && hasKeyword && file.endsWith('.docx');
+          });
+        }
+        
+        // Estrategia 3: Buscar por coincidencia parcial más amplia
+        if (!coverFile && clientName) {
+          console.log(`[getProcessCoverMappedData] Intentando búsqueda parcial amplia...`);
+          coverFile = files.find(file => {
+            const lowerFile = file.toLowerCase();
+            const lowerClient = clientName.toLowerCase();
+            
+            // Buscar si cualquier parte del nombre del cliente aparece en el archivo
+            const hasPortada = lowerFile.includes('portada');
+            const hasPartialMatch = lowerClient.length >= 4 && lowerFile.includes(lowerClient.substring(0, 4));
+            
+            console.log(`[getProcessCoverMappedData] Archivo "${file}" - búsqueda amplia - portada: ${hasPortada}, coincidencia parcial: ${hasPartialMatch}`);
+            return hasPortada && hasPartialMatch && file.endsWith('.docx');
+          });
+        }
+        
+        console.log(`[getProcessCoverMappedData] Resultado final: ${coverFile || 'NO ENCONTRADO'}`);
+        
+        // Fallback final: usar cualquier portada disponible para debugging
+        if (!coverFile) {
+          console.warn(`[getProcessCoverMappedData] No se encontró portada específica, usando primera disponible para debugging`);
+          coverFile = files.find(file => file.toLowerCase().includes('portada') && file.endsWith('.docx'));
+          console.log(`[getProcessCoverMappedData] Fallback final: ${coverFile || 'NINGUNA PORTADA ENCONTRADA'}`);
+        }
+        
+        if (coverFile) {
+          const coverPath = path.join(coversDir, coverFile);
+          const content = await fs.readFile(coverPath);
+          const zip = new PizZip(content);
+          const doc = new Docxtemplater(zip, {
+            delimiters: { start: '«', end: '»' },
+            paragraphsLoop: true,
+            linebreaks: true,
+            modules: [iModule]
+          });
+          doc.render();
+          const tags = iModule.getAllTags();
+          coverFields = Object.keys(tags);
+          console.log('[getProcessCoverMappedData] Campos encontrados en plantilla de portada:', coverFields);
+        }
+      }
+    } catch (templateError) {
+      console.warn('[getProcessCoverMappedData] Error al leer plantilla de portada:', templateError.message);
+    }
+    
+    if (coverFields.length === 0) {
+      console.warn('[getProcessCoverMappedData] No se encontraron campos de plantilla de portada para:', clientName);
+      // Usar campos básicos de portada más comunes según las plantillas inspeccionadas
+      coverFields = ['JUZGADO', 'DOMICILIO', 'CUANTIA', 'DEMANDADO_1'];
+      console.log('[getProcessCoverMappedData] Usando campos básicos de portada:', coverFields);
+    }
+    
+    // 2. Preparar datos del proceso
+    let deudores = [];
+    if (process.deudores && Array.isArray(process.deudores)) {
+        deudores = process.deudores;
+    } else if (process.deudor) {
+        deudores = [process.deudor];
+    }
+
+    const cliente = process.cliente || {};
+    const deudorPrincipal = deudores.length > 0 ? deudores[0] : {};
+    const deudorSecundario = deudores.length > 1 ? deudores[1] : {};
+
+    // 3. Mapeo específico para portadas - campos típicos de portada (más simples que demandas)
+    const allPossibleCoverMappings = {
+      // Información del juzgado (campo común en portadas)
+      'JUZGADO': process.juzgado_origen || process.juzgado || 'Juzgado Civil Municipal',
+      
+      // Domicilio (diferente a ciudad, más específico para portadas)
+      'DOMICILIO': deudorPrincipal.ciudad || process.ciudad || cliente.ciudad || 'Bogotá D.C.',
+      
+      // Cuantía (campo común en portadas)
+      'CUANTIA': process.cuantia || process.valor || 'MÍNIMA',
+      
+      // Demandados (hasta 3 como se ve en las plantillas)
+      'DEMANDADO_1': deudorPrincipal.nombre || '',
+      'DEMANDADO_2': deudorSecundario.nombre || '',
+      'DEMANDADO_3': deudores.length > 2 ? deudores[2].nombre : '',
+      
+      // Campos adicionales que podrían aparecer en algunas portadas
+      'DEMANDADO': deudorPrincipal.nombre || '',
+      'DEMANDANTE': cliente.razon || cliente.nombre || '',
+      'CLIENTE': cliente.razon || cliente.nombre || '',
+      'ENTIDAD': cliente.razon || cliente.nombre || '',
+      'CIUDAD': process.ciudad || deudorPrincipal.ciudad || cliente.ciudad || 'Bogotá D.C.',
+      'MUNICIPIO': process.ciudad || deudorPrincipal.ciudad || cliente.ciudad || 'Bogotá D.C.',
+      'FECHA': new Date().toLocaleDateString('es-CO'),
+      'FECHA_ACTUAL': new Date().toLocaleDateString('es-CO'),
+      'PROCESO_ID': process.proceso_id || '',
+      'NUMERO_PROCESO': process.numero_proceso || process.proceso_id || '',
+      'EXPEDIENTE': process.numero_proceso || process.proceso_id || '',
+      'VALOR': process.valor || process.cuantia || '',
+      'MONTO': process.monto || process.valor || process.cuantia || '',
+      'ABOGADO': process.abogado || '',
+      'APODERADO': process.apoderado || ''
+    };
+
+    // 4. Filtrar solo los campos que requiere la plantilla de portada específica
+    const coverMappedData = {};
+    coverFields.forEach(field => {
+      if (allPossibleCoverMappings.hasOwnProperty(field)) {
+        coverMappedData[field] = allPossibleCoverMappings[field];
+      } else {
+        // Si no tenemos mapeo para este campo, lo dejamos vacío
+        coverMappedData[field] = '';
+        console.warn(`[getProcessCoverMappedData] Campo de portada '${field}' no tiene mapeo definido, se deja vacío`);
+      }
+    });
+    
+    // Filtrar campos con valor para el log
+    const nonEmptyFields = Object.fromEntries(
+      Object.entries(coverMappedData).filter(([key, value]) => value && value.toString().trim())
+    );
+    
+    console.log(`[getProcessCoverMappedData] Mapeo de portada completado. Campos con valor (${Object.keys(nonEmptyFields).length}/${coverFields.length}):`, nonEmptyFields);
+    
+    return coverMappedData;
+
+  } catch (error) {
+    console.error('[getProcessCoverMappedData] Error al mapear los datos de portada del proceso:', error);
     return {};
   }
 });
