@@ -206,18 +206,43 @@ ipcMain.handle('app:getTemplateFields', async (event, clientName) => {
       console.warn('[getTemplateFields] Se recibió un nombre de cliente vacío.');
       return [];
     }
-    // Normalizamos el nombre para la búsqueda (ej: "Coopemsura" -> "coopemsura")
-    const normalizedClientName = clientName.toLowerCase().replace(/\./g, '').split(' ')[0];
+    
+    // Normalizar el nombre del cliente para la búsqueda
+    const normalizedClientName = clientName.toLowerCase()
+      .replace(/\./g, '')
+      .replace(/\s+/g, '')
+      .replace(/[^a-z0-9]/g, '');
+    
     console.log(`[getTemplateFields] Nombre normalizado para búsqueda: "${normalizedClientName}"`);
     
-    const templatesDir = path.join(__dirname, 'formatos', 'formatos');
+    const templatesDir = path.join(__dirname, 'formatos', 'demandas');
     const files = await fs.readdir(templatesDir);
+    console.log(`[getTemplateFields] Archivos disponibles en demandas:`, files);
 
-    // Buscamos un archivo que contenga el nombre normalizado.
-    // Esto es básico y podría mejorarse con un mapeo más explícito.
-    const templateFile = files.find(file => 
-      file.toLowerCase().includes(normalizedClientName) && file.endsWith('.docx')
-    );
+    // Buscar archivo que empiece con el nombre del cliente
+    let templateFile = null;
+    
+    // Estrategia 1: Buscar archivo que empiece con el nombre normalizado
+    templateFile = files.find(file => {
+      const normalizedFileName = file.toLowerCase()
+        .replace(/\./g, '')
+        .replace(/\s+/g, '')
+        .replace(/[^a-z0-9]/g, '');
+      return normalizedFileName.startsWith(normalizedClientName) && file.endsWith('.docx');
+    });
+    
+    // Estrategia 2: Buscar por palabras clave del nombre
+    if (!templateFile && clientName) {
+      const keywords = clientName.toLowerCase().split(/\s+/);
+      templateFile = files.find(file => {
+        const lowerFile = file.toLowerCase();
+        return keywords.some(keyword => 
+          keyword.length > 2 && 
+          lowerFile.startsWith(keyword.toLowerCase()) && 
+          file.endsWith('.docx')
+        );
+      });
+    }
 
     if (!templateFile) {
       console.warn(`[getTemplateFields] No se encontró plantilla para "${clientName}" en ${templatesDir}`);
@@ -255,13 +280,77 @@ ipcMain.handle('app:getTemplateFields', async (event, clientName) => {
   }
 });
 
-// Mapear los datos de un proceso a los campos de la plantilla
+// Mapear los datos de un proceso a los campos de la plantilla de forma dinámica
 ipcMain.handle('app:getProcessMappedData', async (event, process) => {
-  // Log para ver exactamente qué proceso estamos recibiendo
-  console.log('[getProcessMappedData] Iniciando mapeo para el proceso:', JSON.stringify(process, null, 2));
+  console.log('[getProcessMappedData] Iniciando mapeo dinámico para el proceso:', process.proceso_id);
+  console.log('[getProcessMappedData] Cliente:', process.cliente?.razon);
   
   try {
-    // Hacemos el código robusto: aceptamos 'deudores' (plural) o 'deudor' (singular)
+    // 1. Obtener los campos requeridos por la plantilla de esta entidad
+    const clientName = process.cliente?.razon || '';
+    let templateFields = [];
+    
+    // Obtener campos de la plantilla (copiamos la lógica de getTemplateFields)
+    try {
+      if (clientName) {
+        const normalizedClientName = clientName.toLowerCase()
+          .replace(/\./g, '')
+          .replace(/\s+/g, '')
+          .replace(/[^a-z0-9]/g, '');
+        
+        const templatesDir = path.join(__dirname, 'formatos', 'demandas');
+        const files = await fs.readdir(templatesDir);
+        
+        // Buscar archivo que empiece con el nombre del cliente
+        let templateFile = files.find(file => {
+          const normalizedFileName = file.toLowerCase()
+            .replace(/\./g, '')
+            .replace(/\s+/g, '')
+            .replace(/[^a-z0-9]/g, '');
+          return normalizedFileName.startsWith(normalizedClientName) && file.endsWith('.docx');
+        });
+        
+        // Fallback: buscar por palabras clave
+        if (!templateFile && clientName) {
+          const keywords = clientName.toLowerCase().split(/\s+/);
+          templateFile = files.find(file => {
+            const lowerFile = file.toLowerCase();
+            return keywords.some(keyword => 
+              keyword.length > 2 && 
+              lowerFile.startsWith(keyword.toLowerCase()) && 
+              file.endsWith('.docx')
+            );
+          });
+        }
+        
+        if (templateFile) {
+          const templatePath = path.join(templatesDir, templateFile);
+          const content = await fs.readFile(templatePath);
+          const zip = new PizZip(content);
+          const doc = new Docxtemplater(zip, {
+            delimiters: { start: '«', end: '»' },
+            paragraphsLoop: true,
+            linebreaks: true,
+            modules: [iModule]
+          });
+          doc.render();
+          const tags = iModule.getAllTags();
+          templateFields = Object.keys(tags);
+          console.log('[getProcessMappedData] Campos encontrados en plantilla:', templateFields);
+        }
+      }
+    } catch (templateError) {
+      console.warn('[getProcessMappedData] Error al leer plantilla:', templateError.message);
+    }
+    
+    if (templateFields.length === 0) {
+      console.warn('[getProcessMappedData] No se encontraron campos de plantilla para:', clientName);
+      // En lugar de retornar vacío, usamos un conjunto básico de campos comunes
+      templateFields = ['JUZGADO', 'DEMANDADO_1', 'CUANTIA', 'DIRECCION_NOTIFICACION', 'CORREO'];
+      console.log('[getProcessMappedData] Usando campos básicos:', templateFields);
+    }
+    
+    // 2. Preparar datos del proceso
     let deudores = [];
     if (process.deudores && Array.isArray(process.deudores)) {
         deudores = process.deudores;
@@ -271,27 +360,108 @@ ipcMain.handle('app:getProcessMappedData', async (event, process) => {
 
     const cliente = process.cliente || {};
     const deudorPrincipal = deudores.length > 0 ? deudores[0] : {};
+    const deudorSecundario = deudores.length > 1 ? deudores[1] : {};
 
-    // Mapeo inicial SOLO con los datos directos del proceso
-    const mappedData = {
-      'JUZGADO': process.juzgado_origen || 'Juzgado Civil Municipal',
-      'DOMICILIO': deudorPrincipal.ciudad || '',
-      'CUANTIA': 'MÍNIMA',
+    // 3. Mapeo dinámico completo - todos los posibles campos
+    const allPossibleMappings = {
+      // Información del juzgado
+      'JUZGADO': process.juzgado_origen || process.juzgado || 'Juzgado Civil Municipal',
+      'CIUDAD': process.ciudad || deudorPrincipal.ciudad || cliente.ciudad || 'Bogotá D.C.',
+      'DOMICILIO': deudorPrincipal.ciudad || process.ciudad || 'Bogotá D.C.',
+      
+      // Información de cuantía
+      'CUANTIA': process.cuantia || process.valor || 'MÍNIMA',
+      'VALOR': process.valor || process.cuantia || '',
+      'MONTO': process.monto || process.valor || process.cuantia || '',
+      'VALOR_CAPITAL': process.valor_capital || process.valor || '',
+      'VALOR_INTERESES': process.valor_intereses || '',
+      'VALOR_TOTAL': process.valor_total || process.valor || '',
+      
+      // Información del demandante (cliente)
+      'DEMANDANTE': cliente.razon || cliente.nombre || '',
+      'CLIENTE': cliente.razon || cliente.nombre || '',
+      'ENTIDAD': cliente.razon || cliente.nombre || '',
+      'RAZON_SOCIAL': cliente.razon || cliente.nombre || '',
+      'NIT_DEMANDANTE': cliente.nit || '',
+      'DIRECCION_DEMANDANTE': cliente.direccion || '',
+      
+      // Información del demandado principal
+      'DEMANDADO': deudorPrincipal.nombre || '',
       'DEMANDADO_1': deudorPrincipal.nombre || '',
-      'DEMANDADO_2': deudores.length > 1 ? deudores[1].nombre : '',
+      'DEUDOR': deudorPrincipal.nombre || '',
+      'NOMBRE_DEUDOR': deudorPrincipal.nombre || '',
+      'NOMBRES_DEUDOR': deudorPrincipal.nombre || '',
+      'CEDULA_DEUDOR': deudorPrincipal.cedula || deudorPrincipal.documento || '',
+      'DOCUMENTO_DEUDOR': deudorPrincipal.cedula || deudorPrincipal.documento || '',
+      'CC_DEUDOR': deudorPrincipal.cedula || deudorPrincipal.documento || '',
+      'DIRECCION_DEUDOR': deudorPrincipal.direccion || '',
+      'TELEFONO_DEUDOR': deudorPrincipal.telefono || '',
+      'EMAIL_DEUDOR': deudorPrincipal.email || '',
+      'CIUDAD_DEUDOR': deudorPrincipal.ciudad || '',
+      
+      // Información del demandado secundario
+      'DEMANDADO_2': deudorSecundario.nombre || '',
+      'DEUDOR_2': deudorSecundario.nombre || '',
+      'NOMBRE_DEUDOR_2': deudorSecundario.nombre || '',
+      'CEDULA_DEUDOR_2': deudorSecundario.cedula || deudorSecundario.documento || '',
+      'DOCUMENTO_DEUDOR_2': deudorSecundario.cedula || deudorSecundario.documento || '',
+      
+      // Información de notificación
       'DIRECCION_NOTIFICACION': deudorPrincipal.direccion || '',
       'CORREO': deudorPrincipal.email || '',
+      'CORREO_NOTIFICACION': deudorPrincipal.email || '',
+      'EMAIL_NOTIFICACION': deudorPrincipal.email || '',
+      
+      // Información del proceso
+      'PROCESO_ID': process.proceso_id || '',
+      'NUMERO_PROCESO': process.numero_proceso || process.proceso_id || '',
+      'FECHA': new Date().toLocaleDateString('es-CO'),
+      'FECHA_ACTUAL': new Date().toLocaleDateString('es-CO'),
+      'FECHA_DEMANDA': new Date().toLocaleDateString('es-CO'),
+      
+      // Información del pagaré
+      'NUMERO_PAGARE': process.numero_pagare || '',
+      'FECHA_PAGARE': process.fecha_pagare || '',
+      'VENCIMIENTO_PAGARE': process.vencimiento_pagare || '',
+      'LUGAR_PAGARE': process.lugar_pagare || '',
+      
+      // Información adicional
+      'ABOGADO': process.abogado || '',
+      'FIRMA_ABOGADO': process.firma_abogado || '',
+      'TARJETA_PROFESIONAL': process.tarjeta_profesional || '',
+      'APODERADO': process.apoderado || '',
+      
+      // Campos específicos por entidad (pueden variar)
+      'PRESTAMO': process.prestamo || '',
+      'CREDITO': process.credito || '',
+      'OBLIGACION': process.obligacion || '',
+      'TITULO': process.titulo || '',
+      'DOCUMENTO': process.documento || ''
     };
-    
-    console.log('[getProcessMappedData] Mapeo desde API/JSON completado:', JSON.stringify(mappedData, null, 2));
 
-    // --- La extracción desde PDF queda desactivada por ahora ---
-    console.log('[getProcessMappedData] La extracción desde PDF está desactivada para esta prueba.');
+    // 4. Filtrar solo los campos que requiere la plantilla específica
+    const mappedData = {};
+    templateFields.forEach(field => {
+      if (allPossibleMappings.hasOwnProperty(field)) {
+        mappedData[field] = allPossibleMappings[field];
+      } else {
+        // Si no tenemos mapeo para este campo, lo dejamos vacío para que el usuario lo complete
+        mappedData[field] = '';
+        console.warn(`[getProcessMappedData] Campo '${field}' no tiene mapeo definido, se deja vacío`);
+      }
+    });
+    
+    // Filtrar campos con valor para el log
+    const nonEmptyFields = Object.fromEntries(
+      Object.entries(mappedData).filter(([key, value]) => value && value.toString().trim())
+    );
+    
+    console.log(`[getProcessMappedData] Mapeo completado. Campos con valor (${Object.keys(nonEmptyFields).length}/${templateFields.length}):`, nonEmptyFields);
     
     return mappedData;
 
   } catch (error) {
-    console.error('Error al mapear los datos del proceso:', error);
+    console.error('[getProcessMappedData] Error al mapear los datos del proceso:', error);
     return {};
   }
 });
@@ -376,7 +546,7 @@ ipcMain.handle('app:diligenciarDemanda', async (event, proceso) => {
     const clientName = proceso.cliente?.razon || '';
     console.log('[diligenciarDemanda] Buscando formato para cliente:', clientName);
     
-    const templatesDir = path.join(__dirname, 'formatos', 'formatos');
+    const templatesDir = path.join(__dirname, 'formatos', 'demandas');
     const files = await fs.readdir(templatesDir);
     console.log('[diligenciarDemanda] Archivos disponibles:', files);
     
@@ -391,38 +561,31 @@ ipcMain.handle('app:diligenciarDemanda', async (event, proceso) => {
     // Buscar el archivo de formato correspondiente con múltiples estrategias
     let templateFile = null;
     
-    // Estrategia 1: Buscar por nombre exacto normalizado
+    // Estrategia 1: Buscar archivo que empiece con el nombre normalizado
     templateFile = files.find(file => {
       const normalizedFileName = file.toLowerCase()
         .replace(/\./g, '')
         .replace(/\s+/g, '')
         .replace(/[^a-z0-9]/g, '');
-      return normalizedFileName.includes(normalizedClientName) && 
-             file.toLowerCase().includes('normal') && 
-             file.endsWith('.docx');
+      return normalizedFileName.startsWith(normalizedClientName) && file.endsWith('.docx');
     });
     
-    // Estrategia 2: Buscar por palabras clave del nombre
+    // Estrategia 2: Buscar por palabras clave del nombre (que empiecen con la palabra)
     if (!templateFile && clientName) {
       const keywords = clientName.toLowerCase().split(/\s+/);
       templateFile = files.find(file => {
         const lowerFile = file.toLowerCase();
         return keywords.some(keyword => 
           keyword.length > 2 && 
-          lowerFile.includes(keyword) && 
-          lowerFile.includes('normal') && 
+          lowerFile.startsWith(keyword.toLowerCase()) && 
           file.endsWith('.docx')
         );
       });
     }
     
-    // Estrategia 3: Usar el primer formato disponible como fallback
+    // Estrategia 3: Usar el primer archivo disponible como fallback
     if (!templateFile) {
-      templateFile = files.find(file => 
-        file.toLowerCase().includes('formato') && 
-        file.toLowerCase().includes('normal') && 
-        file.endsWith('.docx')
-      );
+      templateFile = files.find(file => file.endsWith('.docx') && !file.startsWith('~$'));
       console.warn('[diligenciarDemanda] No se encontró formato específico, usando fallback:', templateFile);
     }
     
