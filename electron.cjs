@@ -9,6 +9,7 @@ const Docxtemplater = require('docxtemplater');
 const pdf = require('pdf-parse');
 const InspectModule = require('docxtemplater/js/inspect-module.js');
 const { NumerosALetras } = require('numero-a-letras');
+const mammoth = require('mammoth');
 
 const iModule = InspectModule();
 let mainWindow;
@@ -297,10 +298,228 @@ ipcMain.handle('app:getProcessMappedData', async (event, process) => {
 
 // Diligenciar una demanda con los datos de un proceso
 ipcMain.handle('app:diligenciarDemanda', async (event, proceso) => {
-  const { entidad, deudor } = proceso;
-  console.log('[Electron Backend] Iniciando diligenciamiento para:', entidad);
-  // ... (la implementaremos de nuevo en el siguiente paso)
-  return { success: true, message: 'Función de diligenciamiento lista para ser implementada.' };
+  console.log('[diligenciarDemanda] Iniciando diligenciamiento para proceso:', proceso.proceso_id);
+  console.log('[diligenciarDemanda] Cliente:', proceso.cliente?.razon);
+  
+  try {
+    // 1. Obtener los datos mapeados del proceso (copiamos la lógica aquí)
+    console.log('[diligenciarDemanda] Estructura del proceso recibido:', JSON.stringify(proceso, null, 2));
+    
+    let deudores = [];
+    if (proceso.deudores && Array.isArray(proceso.deudores)) {
+        deudores = proceso.deudores;
+    } else if (proceso.deudor) {
+        deudores = [proceso.deudor];
+    }
+
+    const cliente = proceso.cliente || {};
+    const deudorPrincipal = deudores.length > 0 ? deudores[0] : {};
+    const deudorSecundario = deudores.length > 1 ? deudores[1] : {};
+
+    // Mapeo más completo y robusto de datos
+    const mappedData = {
+      // Información del juzgado
+      'JUZGADO': proceso.juzgado_origen || proceso.juzgado || 'Juzgado Civil Municipal',
+      'CIUDAD': proceso.ciudad || deudorPrincipal.ciudad || cliente.ciudad || 'Bogotá D.C.',
+      'DOMICILIO': deudorPrincipal.ciudad || proceso.ciudad || 'Bogotá D.C.',
+      
+      // Información de cuantía
+      'CUANTIA': proceso.cuantia || proceso.valor || 'MÍNIMA',
+      'VALOR': proceso.valor || proceso.cuantia || '',
+      'MONTO': proceso.monto || proceso.valor || proceso.cuantia || '',
+      
+      // Información del demandante (cliente)
+      'DEMANDANTE': cliente.razon || cliente.nombre || '',
+      'CLIENTE': cliente.razon || cliente.nombre || '',
+      'ENTIDAD': cliente.razon || cliente.nombre || '',
+      
+      // Información del demandado principal
+      'DEMANDADO': deudorPrincipal.nombre || '',
+      'DEMANDADO_1': deudorPrincipal.nombre || '',
+      'DEUDOR': deudorPrincipal.nombre || '',
+      'NOMBRE_DEUDOR': deudorPrincipal.nombre || '',
+      'CEDULA_DEUDOR': deudorPrincipal.cedula || deudorPrincipal.documento || '',
+      'DIRECCION_DEUDOR': deudorPrincipal.direccion || '',
+      'TELEFONO_DEUDOR': deudorPrincipal.telefono || '',
+      'EMAIL_DEUDOR': deudorPrincipal.email || '',
+      
+      // Información del demandado secundario (si existe)
+      'DEMANDADO_2': deudorSecundario.nombre || '',
+      'DEUDOR_2': deudorSecundario.nombre || '',
+      'CEDULA_DEUDOR_2': deudorSecundario.cedula || deudorSecundario.documento || '',
+      
+      // Información de notificación
+      'DIRECCION_NOTIFICACION': deudorPrincipal.direccion || '',
+      'CORREO': deudorPrincipal.email || '',
+      'CORREO_NOTIFICACION': deudorPrincipal.email || '',
+      
+      // Información del proceso
+      'PROCESO_ID': proceso.proceso_id || '',
+      'NUMERO_PROCESO': proceso.numero_proceso || proceso.proceso_id || '',
+      'FECHA': new Date().toLocaleDateString('es-CO'),
+      'FECHA_ACTUAL': new Date().toLocaleDateString('es-CO'),
+      
+      // Información adicional
+      'ABOGADO': proceso.abogado || '',
+      'FIRMA_ABOGADO': proceso.firma_abogado || '',
+      'TARJETA_PROFESIONAL': proceso.tarjeta_profesional || ''
+    };
+    
+    // Filtrar campos vacíos para el log
+    const nonEmptyFields = Object.fromEntries(
+      Object.entries(mappedData).filter(([key, value]) => value && value.toString().trim())
+    );
+    
+    console.log('[diligenciarDemanda] Datos mapeados (campos con valor):', nonEmptyFields);
+    
+    // 2. Buscar el formato de demanda correspondiente
+    const clientName = proceso.cliente?.razon || '';
+    console.log('[diligenciarDemanda] Buscando formato para cliente:', clientName);
+    
+    const templatesDir = path.join(__dirname, 'formatos', 'formatos');
+    const files = await fs.readdir(templatesDir);
+    console.log('[diligenciarDemanda] Archivos disponibles:', files);
+    
+    // Normalizar el nombre del cliente para búsqueda más flexible
+    const normalizedClientName = clientName.toLowerCase()
+      .replace(/\./g, '')
+      .replace(/\s+/g, '')
+      .replace(/[^a-z0-9]/g, '');
+    
+    console.log('[diligenciarDemanda] Nombre normalizado:', normalizedClientName);
+    
+    // Buscar el archivo de formato correspondiente con múltiples estrategias
+    let templateFile = null;
+    
+    // Estrategia 1: Buscar por nombre exacto normalizado
+    templateFile = files.find(file => {
+      const normalizedFileName = file.toLowerCase()
+        .replace(/\./g, '')
+        .replace(/\s+/g, '')
+        .replace(/[^a-z0-9]/g, '');
+      return normalizedFileName.includes(normalizedClientName) && 
+             file.toLowerCase().includes('normal') && 
+             file.endsWith('.docx');
+    });
+    
+    // Estrategia 2: Buscar por palabras clave del nombre
+    if (!templateFile && clientName) {
+      const keywords = clientName.toLowerCase().split(/\s+/);
+      templateFile = files.find(file => {
+        const lowerFile = file.toLowerCase();
+        return keywords.some(keyword => 
+          keyword.length > 2 && 
+          lowerFile.includes(keyword) && 
+          lowerFile.includes('normal') && 
+          file.endsWith('.docx')
+        );
+      });
+    }
+    
+    // Estrategia 3: Usar el primer formato disponible como fallback
+    if (!templateFile) {
+      templateFile = files.find(file => 
+        file.toLowerCase().includes('formato') && 
+        file.toLowerCase().includes('normal') && 
+        file.endsWith('.docx')
+      );
+      console.warn('[diligenciarDemanda] No se encontró formato específico, usando fallback:', templateFile);
+    }
+    
+    if (!templateFile) {
+      console.error('[diligenciarDemanda] No se encontró ningún formato para:', clientName);
+      return { 
+        success: false, 
+        message: `No se encontró formato de demanda para "${clientName}". Archivos disponibles: ${files.join(', ')}` 
+      };
+    }
+    
+    console.log('[diligenciarDemanda] Formato seleccionado:', templateFile);
+    const templatePath = path.join(templatesDir, templateFile);
+    
+    // 3. Cargar y procesar el documento Word
+    const content = await fs.readFile(templatePath);
+    const zip = new PizZip(content);
+    const doc = new Docxtemplater(zip, {
+      delimiters: {
+        start: '«',
+        end: '»'
+      },
+      paragraphsLoop: true,
+      linebreaks: true,
+      modules: [iModule]
+    });
+    
+    // 4. Renderizar el documento con los datos
+    console.log('[diligenciarDemanda] Renderizando documento con datos:', mappedData);
+    doc.render(mappedData);
+    
+    // 5. Generar el archivo de salida
+    const outputBuffer = doc.getZip().generate({
+      type: 'nodebuffer',
+      compression: 'DEFLATE'
+    });
+    
+    // 6. Guardar el archivo en la carpeta de Documentos del usuario
+    const documentsPath = app.getPath('documents');
+    const outputDir = path.join(documentsPath, 'Demandas_Staff2');
+    await fs.mkdir(outputDir, { recursive: true });
+    
+    const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+    const outputFileName = `Demanda_${proceso.proceso_id}_${timestamp}.docx`;
+    const outputPath = path.join(outputDir, outputFileName);
+    
+    await fs.writeFile(outputPath, outputBuffer);
+    
+    console.log('[diligenciarDemanda] Documento generado exitosamente:', outputPath);
+    
+    // 7. Convertir el documento a HTML para previsualización
+    try {
+      const htmlResult = await mammoth.convertToHtml({ buffer: outputBuffer });
+      const htmlContent = htmlResult.value;
+      
+      // Resaltar los campos que fueron reemplazados
+      let highlightedHtml = htmlContent;
+      Object.keys(mappedData).forEach(key => {
+        const value = mappedData[key];
+        if (value && value.toString().trim()) {
+          // Crear un patrón para resaltar el valor reemplazado
+          const regex = new RegExp(`\\b${value.toString().replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'gi');
+          highlightedHtml = highlightedHtml.replace(regex, `<mark class="field-highlight" data-field="${key}" style="background-color: #ffeb3b; padding: 2px 4px; border-radius: 2px; cursor: pointer;" title="Campo: ${key}">${value}</mark>`);
+        }
+      });
+      
+      console.log('[diligenciarDemanda] HTML generado exitosamente');
+      
+      return {
+        success: true,
+        message: 'Demanda diligenciada exitosamente',
+        filePath: outputPath,
+        fileName: outputFileName,
+        data: mappedData,
+        htmlContent: highlightedHtml
+      };
+      
+    } catch (htmlError) {
+      console.warn('[diligenciarDemanda] Error al generar HTML, pero documento Word creado:', htmlError);
+      return {
+        success: true,
+        message: 'Demanda diligenciada exitosamente (sin previsualización)',
+        filePath: outputPath,
+        fileName: outputFileName,
+        data: mappedData,
+        htmlContent: '<p>Error al generar previsualización. El documento Word fue creado correctamente.</p>'
+      };
+    }
+    
+  } catch (error) {
+    console.error('[diligenciarDemanda] Error al diligenciar demanda:', error);
+    return {
+      success: false,
+      message: `Error al diligenciar demanda: ${error.message}`,
+      error: error.toString()
+    };
+  }
 });
 
 // --- CLASE Y MANEJADORES GENÉRICOS DE PDF ---

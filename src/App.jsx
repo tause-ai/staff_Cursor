@@ -26,6 +26,7 @@ import {
   ListItemIcon,
   Snackbar,
   Alert,
+  CircularProgress,
 } from '@mui/material';
 import ListIcon from '@mui/icons-material/List';
 import Description from '@mui/icons-material/Description';
@@ -38,6 +39,11 @@ import CheckCircleIcon from '@mui/icons-material/CheckCircle';
 import ErrorIcon from '@mui/icons-material/Error';
 import DescriptionIcon from '@mui/icons-material/Description';
 import StarIcon from '@mui/icons-material/Star';
+import Refresh from '@mui/icons-material/Refresh';
+import Visibility from '@mui/icons-material/Visibility';
+import PictureAsPdf from '@mui/icons-material/PictureAsPdf';
+import ReactQuill from 'react-quill';
+import 'react-quill/dist/quill.snow.css';
 
 const screens = [
   { key: 'processList', label: 'Lista de procesos', icon: <ListIcon /> },
@@ -55,22 +61,25 @@ const mockProcesses = [
 ];
 
 function App() {
+  // Estados principales
   const [screen, setScreen] = useState('processList');
-  const [selectedProcess, setSelectedProcess] = useState(null);
   const [processes, setProcesses] = useState([]);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
-  const [detailLoading, setDetailLoading] = useState(false);
-  const [detailError, setDetailError] = useState(null);
-  const [diligenciando, setDiligenciando] = useState(false);
-  const [resultadoFinal, setResultadoFinal] = useState(null);
-  const [apiStatus, setApiStatus] = useState({ processes: 'idle', documents: 'idle' });
-  const [testingApi, setTestingApi] = useState(null);
-  const [extractedData, setExtractedData] = useState(null);
+  const [selectedProcess, setSelectedProcess] = useState(null);
   const [detailTab, setDetailTab] = useState(0);
-  const [snackbar, setSnackbar] = useState({ open: false, message: '', severity: 'info' });
   const [templateFields, setTemplateFields] = useState([]);
   const [mappedData, setMappedData] = useState(null);
+  const [diligenciando, setDiligenciando] = useState(false);
+  const [resultadoFinal, setResultadoFinal] = useState(null);
+  const [extractedData, setExtractedData] = useState(null);
+  const [apiStatus, setApiStatus] = useState({ processes: null, documents: null });
+  const [testingApi, setTestingApi] = useState(null);
+  const [snackbar, setSnackbar] = useState({ open: false, message: '', severity: 'info' });
+  
+  // Estados para el editor WYSIWYG
+  const [editorContent, setEditorContent] = useState('');
+  const [isEditing, setIsEditing] = useState(false);
 
   useEffect(() => {
     const loadProcesses = async () => {
@@ -119,20 +128,26 @@ function App() {
 
     loadProcesses();
     
-    // Escuchar el evento de recarga
+    // Configurar listener para recarga
     const handleReload = () => {
-      console.log('Recibido evento de recarga. Volviendo a cargar procesos...');
+      console.log('[React] Evento de recarga recibido desde Electron');
       loadProcesses();
     };
-
+    
     window.electronAPI.app.onReload(handleReload);
-
-    // Limpieza al desmontar el componente
+    
+    // Cleanup
     return () => {
       window.electronAPI.app.offReload(handleReload);
     };
-
   }, []);
+
+  // Actualizar el contenido del editor cuando cambie el resultado
+  useEffect(() => {
+    if (resultadoFinal && resultadoFinal.htmlContent) {
+      setEditorContent(resultadoFinal.htmlContent);
+    }
+  }, [resultadoFinal]);
 
   const fetchProcessDetails = async (processId) => {
     // Ya no necesitamos esta función, la lógica se mueve al diligenciamiento.
@@ -149,6 +164,11 @@ function App() {
     window.electronAPI.app.diligenciarDemanda(selectedProcess).then(resultado => {
       setDiligenciando(false);
       setResultadoFinal(resultado);
+      
+      // Si el diligenciado fue exitoso, navegar automáticamente al Editor de Demanda
+      if (resultado.success) {
+        setScreen('demandEditor');
+      }
     });
   };
 
@@ -386,69 +406,214 @@ function App() {
     );
   };
 
-  const renderDemandEditor = () => (
-    <Box>
-      <Typography variant="h4" gutterBottom>
-        Revisión y Edición de la Demanda
-      </Typography>
-      <Typography variant="body1" color="text.secondary" gutterBottom>
-        Verifica los datos extraídos y corrige si es necesario antes de generar el documento final.
-      </Typography>
+  const renderDemandEditor = () => {
+    // Si no hay proceso seleccionado o resultado, mostrar mensaje
+    if (!selectedProcess || !resultadoFinal) {
+      return (
+        <Box>
+          <Typography variant="h4" gutterBottom>
+            Editor de Demanda
+          </Typography>
+          <Typography variant="body1" color="text.secondary" gutterBottom>
+            No hay proceso seleccionado o datos de demanda disponibles.
+          </Typography>
+          <Button
+            variant="outlined"
+            onClick={() => setScreen('processList')}
+            sx={{ mt: 2 }}
+          >
+            Volver a la Lista de Procesos
+          </Button>
+        </Box>
+      );
+    }
 
-      {diligenciando && <Typography sx={{ my: 2 }}>Extrayendo y diligenciando, por favor espere...</Typography>}
+    // Configuración del editor Quill
+    const quillModules = {
+      toolbar: [
+        [{ 'header': [1, 2, 3, false] }],
+        ['bold', 'italic', 'underline'],
+        [{ 'list': 'ordered'}, { 'list': 'bullet' }],
+        [{ 'align': [] }],
+        ['clean']
+      ],
+    };
+
+    const quillFormats = [
+      'header', 'bold', 'italic', 'underline',
+      'list', 'bullet', 'align'
+    ];
+
+    // Función para regenerar el documento con cambios
+    const handleRegenerateDocument = async () => {
+      if (!selectedProcess) return;
+      setDiligenciando(true);
       
-      {resultadoFinal && !resultadoFinal.success && (
-        <Chip label={resultadoFinal.message} color="error" sx={{ my: 2 }} />
-      )}
+      try {
+        const resultado = await window.electronAPI.app.diligenciarDemanda(selectedProcess);
+        setResultadoFinal(resultado);
+      } catch (error) {
+        console.error('Error al regenerar documento:', error);
+        setSnackbar({
+          open: true,
+          message: 'Error al regenerar documento: ' + error.message,
+          severity: 'error'
+        });
+      } finally {
+        setDiligenciando(false);
+      }
+    };
 
-      {extractedData && (
-        <Grid container spacing={3} sx={{ mt: 1 }}>
-          {/* Panel Izquierdo: Datos Editables */}
-          <Grid item xs={12} md={5}>
-            <Paper sx={{ p: 3 }}>
-              <Typography variant="h6" gutterBottom>Datos Extraídos</Typography>
-              <Stack spacing={2}>
-                {Object.entries(extractedData).map(([key, value]) => (
-                  <TextField
-                    key={key}
-                    name={key}
-                    label={key.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase())}
-                    value={value}
-                    onChange={handleDataChange}
-                    variant="outlined"
-                    fullWidth
-                  />
-                ))}
-              </Stack>
-            </Paper>
-          </Grid>
+    return (
+      <Box>
+        {/* Header */}
+        <Box sx={{ mb: 3, pb: 2, borderBottom: '1px solid', borderColor: 'divider' }}>
+          <Typography variant="h4" gutterBottom>
+            📄 Editor de Demanda - {selectedProcess.cliente?.razon}
+          </Typography>
+          <Typography variant="body1" color="text.secondary">
+            Proceso ID: <strong>{selectedProcess.proceso_id}</strong> | 
+            Deudor: <strong>{selectedProcess.deudor?.nombre}</strong>
+          </Typography>
+          
+          {/* Barra de herramientas */}
+          <Stack direction="row" spacing={2} sx={{ mt: 2 }}>
+            <Button
+              variant={isEditing ? "contained" : "outlined"}
+              color="primary"
+              onClick={() => setIsEditing(!isEditing)}
+              startIcon={<Edit />}
+            >
+              {isEditing ? 'Modo Lectura' : 'Modo Edición'}
+            </Button>
+            <Button
+              variant="outlined"
+              onClick={handleRegenerateDocument}
+              disabled={diligenciando}
+              startIcon={<Refresh />}
+            >
+              {diligenciando ? 'Regenerando...' : 'Regenerar'}
+            </Button>
+            <Button
+              variant="contained"
+              startIcon={<Download />}
+              onClick={() => {
+                if (resultadoFinal.filePath) {
+                  window.electronAPI.shell.openFile(resultadoFinal.filePath);
+                }
+              }}
+              disabled={!resultadoFinal.filePath}
+            >
+              Abrir Word
+            </Button>
+            <Button
+              variant="outlined"
+              startIcon={<PictureAsPdf />}
+              onClick={() => {
+                setSnackbar({
+                  open: true,
+                  message: 'Función de exportar a PDF en desarrollo',
+                  severity: 'info'
+                });
+              }}
+            >
+              Exportar PDF
+            </Button>
+          </Stack>
+        </Box>
 
-          {/* Panel Derecho: Previsualización y Acciones */}
-          <Grid item xs={12} md={7}>
-            <Paper sx={{ p: 3, height: '100%' }}>
-              <Typography variant="h6" gutterBottom>Previsualización del Documento</Typography>
-              <Box sx={{ my: 2, p: 2, border: '1px dashed grey', borderRadius: 1, minHeight: 300 }}>
-                <Typography color="text.secondary">
-                  Aquí se mostrará una vista previa del documento Word/PDF diligenciado.
-                </Typography>
-                <Typography color="text.secondary" sx={{ mt: 2 }}>
-                  Ruta del archivo temporal: {resultadoFinal?.filePath}
-                </Typography>
-              </Box>
-              <Stack direction="row" spacing={2} sx={{ mt: 2 }}>
-                <Button variant="contained" startIcon={<Save />}>
-                  Guardar y Exportar PDF
-                </Button>
-                <Button variant="outlined">
-                  Descargar como Word
-                </Button>
-              </Stack>
-            </Paper>
-          </Grid>
-        </Grid>
-      )}
-    </Box>
-  );
+        {/* Indicador de carga */}
+        {diligenciando && (
+          <Box sx={{ mb: 3, display: 'flex', alignItems: 'center', gap: 2 }}>
+            <CircularProgress size={20} />
+            <Typography>Procesando demanda, por favor espere...</Typography>
+          </Box>
+        )}
+        
+        {/* Mensaje de error */}
+        {resultadoFinal && !resultadoFinal.success && (
+          <Alert severity="error" sx={{ mb: 3 }}>
+            {resultadoFinal.message}
+          </Alert>
+        )}
+
+        {/* Información del documento */}
+        {resultadoFinal && resultadoFinal.success && resultadoFinal.filePath && (
+          <Box sx={{ mb: 3, p: 2, bgcolor: 'success.light', borderRadius: 1 }}>
+            <Typography variant="body2" sx={{ fontWeight: 'bold', color: 'success.dark' }}>
+              ✓ Documento generado exitosamente
+            </Typography>
+            <Typography variant="caption" color="text.secondary">
+              Archivo: {resultadoFinal.filePath.split('/').pop()}
+            </Typography>
+          </Box>
+        )}
+
+        {/* Editor WYSIWYG Principal */}
+        {resultadoFinal && resultadoFinal.success && (
+          <Paper sx={{ p: 0, overflow: 'hidden' }}>
+            <Box sx={{ p: 2, bgcolor: 'primary.main', color: 'white' }}>
+              <Typography variant="h6" sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                <Visibility />
+                Contenido de la Demanda
+              </Typography>
+              <Typography variant="body2" sx={{ opacity: 0.9 }}>
+                Los campos resaltados en amarillo fueron extraídos automáticamente. 
+                {isEditing ? ' Puedes editarlos directamente en el texto.' : ' Activa el modo edición para modificarlos.'}
+              </Typography>
+            </Box>
+            
+            <Box sx={{ minHeight: 600 }}>
+              {isEditing ? (
+                <ReactQuill
+                  theme="snow"
+                  value={editorContent}
+                  onChange={setEditorContent}
+                  modules={quillModules}
+                  formats={quillFormats}
+                  style={{ height: '500px' }}
+                />
+              ) : (
+                <Box 
+                  sx={{ 
+                    p: 3, 
+                    minHeight: 500,
+                    '& .field-highlight': {
+                      backgroundColor: '#ffeb3b !important',
+                      padding: '2px 4px',
+                      borderRadius: '2px',
+                      cursor: 'pointer',
+                      '&:hover': {
+                        backgroundColor: '#ffc107 !important',
+                        boxShadow: '0 0 0 2px rgba(25, 118, 210, 0.2)'
+                      }
+                    }
+                  }}
+                  dangerouslySetInnerHTML={{ __html: editorContent }}
+                />
+              )}
+            </Box>
+          </Paper>
+        )}
+
+        {/* Botones de navegación */}
+        <Stack direction="row" spacing={2} sx={{ mt: 3 }}>
+          <Button
+            variant="outlined"
+            onClick={() => setScreen('processDetail')}
+          >
+            ← Volver al Detalle
+          </Button>
+          <Button
+            variant="outlined"
+            onClick={() => setScreen('processList')}
+          >
+            ← Volver a la Lista
+          </Button>
+        </Stack>
+      </Box>
+    );
+  };
 
   const renderLocalHistory = () => (
     <Box>
