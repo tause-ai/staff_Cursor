@@ -29,6 +29,10 @@ const electronAPI = {
     diligenciarDemanda: (proceso) =>
       ipcRenderer.invoke('app:diligenciarDemanda', proceso),
       
+    // Enviar un proceso para generar portada
+    diligenciarPortada: (proceso) =>
+      ipcRenderer.invoke('app:diligenciarPortada', proceso),
+      
     // Obtener ruta de la carpeta de Documentos del usuario
     getDocumentsPath: () => 
       ipcRenderer.invoke('app:getDocumentsPath'),

@@ -71,6 +71,7 @@ function App() {
   const [templateFields, setTemplateFields] = useState([]);
   const [mappedData, setMappedData] = useState(null);
   const [diligenciando, setDiligenciando] = useState(false);
+  const [generandoPortada, setGenerandoPortada] = useState(false);
   const [resultadoFinal, setResultadoFinal] = useState(null);
   const [extractedData, setExtractedData] = useState(null);
   const [apiStatus, setApiStatus] = useState({ processes: null, documents: null });
@@ -174,6 +175,54 @@ function App() {
         setScreen('demandEditor');
       }
     });
+  };
+
+  const handleGenerarPortada = async () => {
+    if (!selectedProcess) {
+      setSnackbar({
+        open: true,
+        message: 'Por favor selecciona un proceso primero.',
+        severity: 'warning'
+      });
+      return;
+    }
+
+    setGenerandoPortada(true);
+    
+    try {
+      console.log('Generando portada para proceso:', selectedProcess.proceso_id);
+      const resultado = await window.electronAPI.app.diligenciarPortada(selectedProcess);
+      
+      if (resultado.success) {
+        setSnackbar({
+          open: true,
+          message: `Portada generada exitosamente: ${resultado.fileName}`,
+          severity: 'success'
+        });
+        
+        // Opcionalmente abrir el archivo generado
+        if (resultado.filePath) {
+          setTimeout(() => {
+            window.electronAPI.shell.openFile(resultado.filePath);
+          }, 1000);
+        }
+      } else {
+        setSnackbar({
+          open: true,
+          message: `Error al generar portada: ${resultado.message}`,
+          severity: 'error'
+        });
+      }
+    } catch (error) {
+      console.error('Error al generar portada:', error);
+      setSnackbar({
+        open: true,
+        message: `Error al generar portada: ${error.message}`,
+        severity: 'error'
+      });
+    } finally {
+      setGenerandoPortada(false);
+    }
   };
 
   const handleTestApi = async (type) => {
@@ -481,6 +530,14 @@ function App() {
             disabled={diligenciando || !selectedProcess}
           >
             {diligenciando ? 'Generando Demanda...' : 'Generar Demanda'}
+          </Button>
+          <Button
+            variant="contained"
+            color="secondary"
+            onClick={handleGenerarPortada}
+            disabled={generandoPortada || !selectedProcess}
+          >
+            {generandoPortada ? 'Generando Portada...' : 'Generar Portada'}
           </Button>
           <Button
             variant="outlined"

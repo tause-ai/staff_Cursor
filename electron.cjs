@@ -587,8 +587,8 @@ async function getProcessMappedData(process) {
       'NUMERO_PAGARE': datosPagare.numeroPagare || process.numero_pagare || '',
       'PAGARE': datosPagare.numeroPagare || process.numero_pagare || '',
       'PAGARE_1': datosPagare.numeroPagare || process.numero_pagare || '', // Variación adicional
-      'PAGARE_2': '', // Campo para segundo pagaré, se deja vacío por defecto
-      'PAGARE_3': '', // Campo para tercer pagaré, se deja vacío por defecto
+      'PAGARE_2': datosPagare.numeroPagare || process.numero_pagare || '', // Mismo número para segundo pagaré
+      'PAGARE_3': datosPagare.numeroPagare || process.numero_pagare || '', // Mismo número para tercer pagaré
       'NUM_PAGARE': datosPagare.numeroPagare || process.numero_pagare || '', // Variación adicional
       'NO_PAGARE': datosPagare.numeroPagare || process.numero_pagare || '', // Variación adicional
       'FECHA_PAGARE': datosPagare.fechaSuscripcion || process.fecha_pagare || '',
@@ -600,8 +600,8 @@ async function getProcessMappedData(process) {
       'SUSCRIPCION_DEL_PAGARE': datosPagare.fechaSuscripcion || process.fecha_suscripcion || '',
       'VENCIMIENTO_PAGARE': datosPagare.fechaVencimiento || process.vencimiento_pagare || '',
       'VENCIMIENTO': datosPagare.fechaVencimiento || process.vencimiento || '',
-      'VENCIMIENTO_2': '', // Campo para segundo vencimiento, se deja vacío por defecto
-      'VENCIMIENTO_3': '', // Campo para tercer vencimiento, se deja vacío por defecto
+      'VENCIMIENTO_2': datosPagare.fechaVencimiento || process.vencimiento || '', // Misma fecha para segundo vencimiento
+      'VENCIMIENTO_3': datosPagare.fechaVencimiento || process.vencimiento || '', // Misma fecha para tercer vencimiento
       'FECHA_VENCIMIENTO': datosPagare.fechaVencimiento || process.fecha_vencimiento || '',
       'FECHA_MORA': datosPagare.fechaMora || calcularFechaMora(datosPagare.fechaVencimiento) || '',
       'MORA': datosPagare.fechaMora || calcularFechaMora(datosPagare.fechaVencimiento) || '',
@@ -613,10 +613,10 @@ async function getProcessMappedData(process) {
       
       // Campos de capital e intereses (usar el valor formateado del PDF)
       'CAPITAL_INSOLUTO': datosPagare.valorFormateado || formatearValorCompleto(process.valor) || '',
-      'CAPITAL_INSOLUTO_2': '', // Campo para segundo capital, se deja vacío por defecto
-      'CAPITAL_INSOLUTO_3': '', // Campo para tercer capital, se deja vacío por defecto
-      'INTERES_MORA_2': '', // Campo para segundo interés, se deja vacío por defecto
-      'INTERES_MORA_3': '', // Campo para tercer interés, se deja vacío por defecto
+      'CAPITAL_INSOLUTO_2': datosPagare.valorFormateado || formatearValorCompleto(process.valor) || '', // Mismo valor para segundo capital
+      'CAPITAL_INSOLUTO_3': datosPagare.valorFormateado || formatearValorCompleto(process.valor) || '', // Mismo valor para tercer capital
+      'INTERES_MORA_2': datosPagare.fechaMora || calcularFechaMora(datosPagare.fechaVencimiento) || '', // Misma fecha para segundo interés
+      'INTERES_MORA_3': datosPagare.fechaMora || calcularFechaMora(datosPagare.fechaVencimiento) || '', // Misma fecha para tercer interés
       
       // Información adicional
       'ABOGADO': process.abogado || '',
@@ -664,8 +664,8 @@ ipcMain.handle('app:getProcessMappedData', async (event, process) => {
   return await getProcessMappedData(process);
 });
 
-// Mapear los datos de un proceso a los campos de la plantilla de portada
-ipcMain.handle('app:getProcessCoverMappedData', async (event, process) => {
+// Función auxiliar para mapear datos de portada (similar a getProcessMappedData)
+async function getProcessCoverMappedData(process) {
   console.log('[getProcessCoverMappedData] Iniciando mapeo de portada para el proceso:', process.proceso_id);
   console.log('[getProcessCoverMappedData] Cliente:', process.cliente?.razon);
   
@@ -834,26 +834,26 @@ ipcMain.handle('app:getProcessCoverMappedData', async (event, process) => {
       
       // Información del pagaré (campos que pueden aparecer en portadas)
       'PAGARE': datosPagare.numeroPagare || process.numero_pagare || '',
-      'PAGARE_2': '', // Campo para segundo pagaré
-      'PAGARE_3': '', // Campo para tercer pagaré
+      'PAGARE_2': datosPagare.numeroPagare || process.numero_pagare || '', // Mismo número para segundo pagaré
+      'PAGARE_3': datosPagare.numeroPagare || process.numero_pagare || '', // Mismo número para tercer pagaré
       'NUMERO_PAGARE': datosPagare.numeroPagare || process.numero_pagare || '',
       'FECHA_SUSCRIPCION': datosPagare.fechaSuscripcion || process.fecha_suscripcion || '',
       'SUSCRIPCION': datosPagare.fechaSuscripcion || process.fecha_suscripcion || '',
       'FECHA_DE_SUSCRIPCION': datosPagare.fechaSuscripcion || process.fecha_suscripcion || '',
       'SUSCRIPCION_DEL_PAGARE': datosPagare.fechaSuscripcion || process.fecha_suscripcion || '',
       'VENCIMIENTO': datosPagare.fechaVencimiento || process.vencimiento || '',
-      'VENCIMIENTO_2': '', // Campo para segundo vencimiento
-      'VENCIMIENTO_3': '', // Campo para tercer vencimiento
+      'VENCIMIENTO_2': datosPagare.fechaVencimiento || process.vencimiento || '', // Misma fecha para segundo vencimiento
+      'VENCIMIENTO_3': datosPagare.fechaVencimiento || process.vencimiento || '', // Misma fecha para tercer vencimiento
       'FECHA_VENCIMIENTO': datosPagare.fechaVencimiento || process.fecha_vencimiento || '',
       'FECHA_MORA': datosPagare.fechaMora || calcularFechaMora(datosPagare.fechaVencimiento) || '',
       'FECHA_DE_MORA': datosPagare.fechaMora || calcularFechaMora(datosPagare.fechaVencimiento) || '',
       'MORA': datosPagare.fechaMora || calcularFechaMora(datosPagare.fechaVencimiento) || '',
       'CAPITAL_INSOLUTO': datosPagare.valorFormateado || formatearValorCompleto(process.valor) || '',
-      'CAPITAL_INSOLUTO_2': '', // Campo para segundo capital
-      'CAPITAL_INSOLUTO_3': '', // Campo para tercer capital
+      'CAPITAL_INSOLUTO_2': datosPagare.valorFormateado || formatearValorCompleto(process.valor) || '', // Mismo valor para segundo capital
+      'CAPITAL_INSOLUTO_3': datosPagare.valorFormateado || formatearValorCompleto(process.valor) || '', // Mismo valor para tercer capital
       'INTERES_MORA': datosPagare.fechaMora || calcularFechaMora(datosPagare.fechaVencimiento) || '', // Campo para fecha de intereses de mora
-      'INTERES_MORA_2': '', // Campo para segundo interés
-      'INTERES_MORA_3': '', // Campo para tercer interés
+      'INTERES_MORA_2': datosPagare.fechaMora || calcularFechaMora(datosPagare.fechaVencimiento) || '', // Misma fecha para segundo interés
+      'INTERES_MORA_3': datosPagare.fechaMora || calcularFechaMora(datosPagare.fechaVencimiento) || '', // Misma fecha para tercer interés
       'DIRECCION_NOTIFICACION': deudorPrincipal.direccion || '',
       'DIRECCION_NOTIFICACION_2': deudorSecundario.direccion || '',
       'CORREO': deudorPrincipal.email || '',
@@ -884,6 +884,154 @@ ipcMain.handle('app:getProcessCoverMappedData', async (event, process) => {
   } catch (error) {
     console.error('[getProcessCoverMappedData] Error al mapear los datos de portada del proceso:', error);
     return {};
+  }
+}
+
+// Handler IPC que usa la función auxiliar de portada
+ipcMain.handle('app:getProcessCoverMappedData', async (event, process) => {
+  return await getProcessCoverMappedData(process);
+});
+
+// Diligenciar una portada con los datos de un proceso
+ipcMain.handle('app:diligenciarPortada', async (event, proceso) => {
+  console.log('[diligenciarPortada] Iniciando diligenciamiento de portada para proceso:', proceso.proceso_id);
+  console.log('[diligenciarPortada] Cliente:', proceso.cliente?.razon);
+  
+  try {
+    // 1. Obtener los datos mapeados del proceso para portada
+    console.log('[diligenciarPortada] Obteniendo datos mapeados de portada...');
+    const mappedData = await getProcessCoverMappedData(proceso);
+    
+    console.log('[diligenciarPortada] Datos mapeados de portada obtenidos:', mappedData);
+    
+    // 2. Buscar el formato de portada correspondiente
+    const clientName = proceso.cliente?.razon || '';
+    console.log('[diligenciarPortada] Buscando formato de portada para cliente:', clientName);
+    
+    const templatesDir = path.join(__dirname, 'formatos', 'Portadas');
+    const files = await fs.readdir(templatesDir);
+    console.log('[diligenciarPortada] Archivos de portada disponibles:', files);
+    
+    // Normalizar el nombre del cliente para búsqueda más flexible
+    const normalizedClientName = clientName.toLowerCase()
+      .replace(/\./g, '')
+      .replace(/\s+/g, '')
+      .replace(/[^a-z0-9]/g, '');
+    
+    console.log('[diligenciarPortada] Nombre normalizado:', normalizedClientName);
+    
+    // Buscar el archivo de formato correspondiente
+    let templateFile = null;
+    
+    // Estrategia 1: Buscar archivo que contenga el nombre normalizado y "portada"
+    templateFile = files.find(file => {
+      const normalizedFileName = file.toLowerCase()
+        .replace(/\./g, '')
+        .replace(/\s+/g, '')
+        .replace(/[^a-z0-9]/g, '');
+      return normalizedFileName.includes('portada') && 
+             normalizedFileName.includes(normalizedClientName) && 
+             file.endsWith('.docx');
+    });
+    
+    // Estrategia 2: Buscar por palabras clave del nombre
+    if (!templateFile && clientName) {
+      const keywords = clientName.toLowerCase().split(/\s+/);
+      templateFile = files.find(file => {
+        const lowerFile = file.toLowerCase();
+        return lowerFile.includes('portada') && 
+               keywords.some(keyword => 
+                 keyword.length > 2 && 
+                 lowerFile.includes(keyword.toLowerCase())
+               ) && 
+               file.endsWith('.docx');
+      });
+    }
+    
+    // Estrategia 3: Usar la primera portada disponible como fallback
+    if (!templateFile) {
+      templateFile = files.find(file => file.toLowerCase().includes('portada') && file.endsWith('.docx') && !file.startsWith('~$'));
+      console.warn('[diligenciarPortada] No se encontró portada específica, usando fallback:', templateFile);
+    }
+    
+    if (!templateFile) {
+      console.error('[diligenciarPortada] No se encontró ninguna portada para:', clientName);
+      return { 
+        success: false, 
+        message: `No se encontró formato de portada para "${clientName}". Archivos disponibles: ${files.join(', ')}` 
+      };
+    }
+    
+    console.log('[diligenciarPortada] Formato de portada seleccionado:', templateFile);
+    const templatePath = path.join(templatesDir, templateFile);
+    
+    // 3. Cargar y procesar el documento Word de portada
+    const content = await fs.readFile(templatePath);
+    const zip = new PizZip(content);
+    const doc = new Docxtemplater(zip, {
+      delimiters: {
+        start: '«',
+        end: '»'
+      },
+      paragraphsLoop: true,
+      linebreaks: true,
+      modules: [iModule]
+    });
+    
+    // 4. Renderizar el documento con los datos
+    console.log('[diligenciarPortada] Renderizando portada con datos:', mappedData);
+    doc.render(mappedData);
+    
+    // 5. Generar el archivo de salida
+    const outputBuffer = doc.getZip().generate({
+      type: 'nodebuffer',
+      compression: 'DEFLATE'
+    });
+    
+    // 6. Guardar el archivo en la carpeta de Documentos del usuario
+    const documentsPath = app.getPath('documents');
+    const outputDir = path.join(documentsPath, 'Portadas_Staff2');
+    await fs.mkdir(outputDir, { recursive: true });
+    
+    const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+    const outputFileName = `Portada_${proceso.proceso_id}_${timestamp}.docx`;
+    const outputPath = path.join(outputDir, outputFileName);
+    
+    await fs.writeFile(outputPath, outputBuffer);
+    
+    console.log('[diligenciarPortada] Portada generada exitosamente:', outputPath);
+    
+    // 7. Convertir el documento a HTML para previsualización
+    try {
+      const htmlResult = await mammoth.convertToHtml({ buffer: outputBuffer });
+      const htmlContent = htmlResult.value;
+      
+      console.log('[diligenciarPortada] HTML de portada generado exitosamente');
+      
+      return { 
+        success: true, 
+        message: 'Portada generada exitosamente',
+        filePath: outputPath,
+        fileName: outputFileName,
+        htmlContent: htmlContent
+      };
+    } catch (htmlError) {
+      console.error('[diligenciarPortada] Error al generar HTML de portada:', htmlError);
+      return { 
+        success: true, 
+        message: 'Portada generada exitosamente (sin previsualización)',
+        filePath: outputPath,
+        fileName: outputFileName,
+        htmlContent: '<p>Error al generar previsualización</p>'
+      };
+    }
+    
+  } catch (error) {
+    console.error('[diligenciarPortada] Error al generar portada:', error);
+    return { 
+      success: false, 
+      message: `Error al generar portada: ${error.message}` 
+    };
   }
 });
 
