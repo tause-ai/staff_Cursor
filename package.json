@@ -52,6 +52,7 @@
   "build": {
     "appId": "com.staffbot.app",
     "productName": "Staffbot - Generador de Demandas",
+    "icon": "build/icon.ico",
     "directories": {
       "output": "dist-electron"
     },
@@ -63,7 +64,8 @@
       "node_modules/**/*"
     ],
     "win": {
-      "target": "nsis"
+      "target": "nsis",
+      "icon": "build/icon.ico"
     },
     "nsis": {
       "oneClick": false,
@@ -72,7 +74,8 @@
       "createStartMenuShortcut": true
     },
     "mac": {
-      "target": "dmg"
+      "target": "dmg",
+      "icon": "build/icon.png"
     },
     "linux": {
       "target": "AppImage"

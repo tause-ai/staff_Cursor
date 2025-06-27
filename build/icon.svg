@@ -1,0 +1,33 @@
+<svg width="256" height="256" viewBox="0 0 256 256" xmlns="http://www.w3.org/2000/svg">
+  <!-- Fondo circular -->
+  <circle cx="128" cy="128" r="120" fill="#2563eb" stroke="#1e40af" stroke-width="4"/>
+  
+  <!-- Documento principal -->
+  <rect x="60" y="50" width="100" height="130" rx="8" fill="white" stroke="#e5e7eb" stroke-width="2"/>
+  
+  <!-- Líneas de texto del documento -->
+  <line x1="75" y1="70" x2="145" y2="70" stroke="#6b7280" stroke-width="2"/>
+  <line x1="75" y1="85" x2="135" y2="85" stroke="#6b7280" stroke-width="2"/>
+  <line x1="75" y1="100" x2="145" y2="100" stroke="#6b7280" stroke-width="2"/>
+  <line x1="75" y1="115" x2="125" y2="115" stroke="#6b7280" stroke-width="2"/>
+  
+  <!-- Sello/Firma legal -->
+  <circle cx="130" cy="140" r="15" fill="#dc2626" opacity="0.8"/>
+  <text x="130" y="145" font-family="Arial, sans-serif" font-size="10" font-weight="bold" text-anchor="middle" fill="white">SB</text>
+  
+  <!-- Elementos de automatización (engranajes) -->
+  <g transform="translate(180, 70)">
+    <circle cx="0" cy="0" r="20" fill="#10b981" opacity="0.9"/>
+    <path d="M-8,-8 L8,-8 L8,8 L-8,8 Z" fill="white"/>
+    <circle cx="0" cy="0" r="6" fill="#10b981"/>
+  </g>
+  
+  <g transform="translate(190, 110)">
+    <circle cx="0" cy="0" r="15" fill="#10b981" opacity="0.7"/>
+    <path d="M-6,-6 L6,-6 L6,6 L-6,6 Z" fill="white"/>
+    <circle cx="0" cy="0" r="4" fill="#10b981"/>
+  </g>
+  
+  <!-- Texto "STAFFBOT" -->
+  <text x="128" y="220" font-family="Arial, sans-serif" font-size="18" font-weight="bold" text-anchor="middle" fill="white">STAFFBOT</text>
+</svg> 
