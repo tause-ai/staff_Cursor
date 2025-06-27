@@ -13,7 +13,7 @@ const filePath = process.argv[2] || defaultFile;
 
 if (!fs.existsSync(filePath)) {
     console.error(`Error: El archivo no se encuentra en la ruta especificada: ${filePath}`);
-    process.exit(1);
+  process.exit(1);
 }
 
 console.log(`Inspeccionando la plantilla: ${filePath}`);
@@ -21,7 +21,7 @@ console.log(`Inspeccionando la plantilla: ${filePath}`);
 try {
     const content = fs.readFileSync(filePath); // 'binary' está obsoleto, Buffer es mejor
     const zip = new Pizzip(content);
-    
+  
     // Con la v4, el módulo se instancia y se pasa en el constructor
     const iModule = InspectModule();
     const doc = new Docxtemplater(zip, {
@@ -33,10 +33,10 @@ try {
         linebreaks: true,
         modules: [iModule]
     });
-
+  
     // Es necesario hacer un render (aunque sea con datos vacíos) para que el inspector se ejecute
-    doc.render();
-
+  doc.render();
+  
     const tags = iModule.getAllTags();
 
     if (Object.keys(tags).length > 0) {
@@ -53,7 +53,7 @@ try {
     if (error.properties && error.properties.id === 'file_corrupted') {
         console.error('Error: El archivo parece estar corrupto o no es un formato DOCX válido.');
         console.error(error.message);
-    } else {
+  } else {
         console.error('Ocurrió un error inesperado al procesar el archivo:', error);
-    }
-}
+  }
+} 

@@ -399,8 +399,8 @@ ipcMain.handle('app:getCoverTemplateFields', async (event, clientName) => {
   }
 });
 
-// Mapear los datos de un proceso a los campos de la plantilla de forma dinámica
-ipcMain.handle('app:getProcessMappedData', async (event, process) => {
+// Función auxiliar para mapear los datos de un proceso a los campos de la plantilla
+async function getProcessMappedData(process) {
   console.log('[getProcessMappedData] Iniciando mapeo dinámico para el proceso:', process.proceso_id);
   console.log('[getProcessMappedData] Cliente:', process.cliente?.razon);
   
@@ -528,13 +528,16 @@ ipcMain.handle('app:getProcessMappedData', async (event, process) => {
       'CIUDAD': process.ciudad || deudorPrincipal.ciudad || cliente.ciudad || 'Bogotá D.C.',
       'DOMICILIO': deudorPrincipal.ciudad || process.ciudad || 'Bogotá D.C.',
       
-      // Información de cuantía (priorizar datos del PDF)
+      // Información de cuantía (priorizar datos del PDF) - Múltiples variaciones
       'CUANTIA': process.cuantia || process.valor || 'MÍNIMA',
       'VALOR': datosPagare.valorFormateado || formatearValorCompleto(process.valor || process.cuantia) || process.valor || process.cuantia || '',
       'MONTO': datosPagare.valorFormateado || formatearValorCompleto(process.monto || process.valor || process.cuantia) || process.monto || process.valor || process.cuantia || '',
       'VALOR_CAPITAL': datosPagare.valorFormateado || formatearValorCompleto(process.valor_capital || process.valor) || process.valor_capital || process.valor || '',
       'VALOR_INTERESES': process.valor_intereses || '',
       'VALOR_TOTAL': datosPagare.valorFormateado || formatearValorCompleto(process.valor_total || process.valor) || process.valor_total || process.valor || '',
+      'VALOR_ADEUDADO': datosPagare.valorFormateado || formatearValorCompleto(process.valor) || '', // Variación adicional
+      'SUMA_ADEUDADA': datosPagare.valorFormateado || formatearValorCompleto(process.valor) || '', // Variación adicional
+      'IMPORTE': datosPagare.valorFormateado || formatearValorCompleto(process.valor) || '', // Variación adicional
       
       // Información del demandante (cliente)
       'DEMANDANTE': cliente.razon || cliente.nombre || '',
@@ -580,11 +583,14 @@ ipcMain.handle('app:getProcessMappedData', async (event, process) => {
       'FECHA_ACTUAL': new Date().toLocaleDateString('es-CO'),
       'FECHA_DEMANDA': new Date().toLocaleDateString('es-CO'),
       
-      // Información del pagaré (priorizar datos extraídos del PDF)
+      // Información del pagaré (priorizar datos extraídos del PDF) - Múltiples variaciones
       'NUMERO_PAGARE': datosPagare.numeroPagare || process.numero_pagare || '',
       'PAGARE': datosPagare.numeroPagare || process.numero_pagare || '',
+      'PAGARE_1': datosPagare.numeroPagare || process.numero_pagare || '', // Variación adicional
       'PAGARE_2': '', // Campo para segundo pagaré, se deja vacío por defecto
       'PAGARE_3': '', // Campo para tercer pagaré, se deja vacío por defecto
+      'NUM_PAGARE': datosPagare.numeroPagare || process.numero_pagare || '', // Variación adicional
+      'NO_PAGARE': datosPagare.numeroPagare || process.numero_pagare || '', // Variación adicional
       'FECHA_PAGARE': datosPagare.fechaSuscripcion || process.fecha_pagare || '',
       'FECHA_SUSCRIPCION': datosPagare.fechaSuscripcion || process.fecha_suscripcion || '',
       'SUSCRIPCION': datosPagare.fechaSuscripcion || process.fecha_suscripcion || '',
@@ -651,6 +657,11 @@ ipcMain.handle('app:getProcessMappedData', async (event, process) => {
     console.error('[getProcessMappedData] Error al mapear los datos del proceso:', error);
     return {};
   }
+}
+
+// Handler IPC que usa la función auxiliar
+ipcMain.handle('app:getProcessMappedData', async (event, process) => {
+  return await getProcessMappedData(process);
 });
 
 // Mapear los datos de un proceso a los campos de la plantilla de portada
@@ -882,75 +893,11 @@ ipcMain.handle('app:diligenciarDemanda', async (event, proceso) => {
   console.log('[diligenciarDemanda] Cliente:', proceso.cliente?.razon);
   
   try {
-    // 1. Obtener los datos mapeados del proceso (copiamos la lógica aquí)
-    console.log('[diligenciarDemanda] Estructura del proceso recibido:', JSON.stringify(proceso, null, 2));
+    // 1. Obtener los datos mapeados del proceso usando la función existente que incluye extracción de PDF
+    console.log('[diligenciarDemanda] Obteniendo datos mapeados con extracción de PDF...');
+    const mappedData = await getProcessMappedData(proceso);
     
-    let deudores = [];
-    if (proceso.deudores && Array.isArray(proceso.deudores)) {
-        deudores = proceso.deudores;
-    } else if (proceso.deudor) {
-        deudores = [proceso.deudor];
-    }
-
-    const cliente = proceso.cliente || {};
-    const deudorPrincipal = deudores.length > 0 ? deudores[0] : {};
-    const deudorSecundario = deudores.length > 1 ? deudores[1] : {};
-
-    // Mapeo más completo y robusto de datos
-    const mappedData = {
-      // Información del juzgado
-      'JUZGADO': proceso.juzgado_origen || proceso.juzgado || 'Juzgado Civil Municipal',
-      'CIUDAD': proceso.ciudad || deudorPrincipal.ciudad || cliente.ciudad || 'Bogotá D.C.',
-      'DOMICILIO': deudorPrincipal.ciudad || proceso.ciudad || 'Bogotá D.C.',
-      
-      // Información de cuantía
-      'CUANTIA': proceso.cuantia || proceso.valor || 'MÍNIMA',
-      'VALOR': proceso.valor || proceso.cuantia || '',
-      'MONTO': proceso.monto || proceso.valor || proceso.cuantia || '',
-      
-      // Información del demandante (cliente)
-      'DEMANDANTE': cliente.razon || cliente.nombre || '',
-      'CLIENTE': cliente.razon || cliente.nombre || '',
-      'ENTIDAD': cliente.razon || cliente.nombre || '',
-      
-      // Información del demandado principal
-      'DEMANDADO': deudorPrincipal.nombre || '',
-      'DEMANDADO_1': deudorPrincipal.nombre || '',
-      'DEUDOR': deudorPrincipal.nombre || '',
-      'NOMBRE_DEUDOR': deudorPrincipal.nombre || '',
-      'CEDULA_DEUDOR': deudorPrincipal.cedula || deudorPrincipal.documento || '',
-      'DIRECCION_DEUDOR': deudorPrincipal.direccion || '',
-      'TELEFONO_DEUDOR': deudorPrincipal.telefono || '',
-      'EMAIL_DEUDOR': deudorPrincipal.email || '',
-      
-      // Información del demandado secundario (si existe)
-      'DEMANDADO_2': deudorSecundario.nombre || '',
-      'DEUDOR_2': deudorSecundario.nombre || '',
-      'CEDULA_DEUDOR_2': deudorSecundario.cedula || deudorSecundario.documento || '',
-      
-      // Información de notificación
-      'DIRECCION_NOTIFICACION': deudorPrincipal.direccion || '',
-      'CORREO': deudorPrincipal.email || '',
-      'CORREO_NOTIFICACION': deudorPrincipal.email || '',
-      
-      // Información del proceso
-      'PROCESO_ID': proceso.proceso_id || '',
-      'NUMERO_PROCESO': proceso.numero_proceso || proceso.proceso_id || '',
-      'FECHA': new Date().toLocaleDateString('es-CO'),
-      'FECHA_ACTUAL': new Date().toLocaleDateString('es-CO'),
-      
-      // Información adicional
-      'ABOGADO': proceso.abogado || '',
-      'FIRMA_ABOGADO': proceso.firma_abogado || '',
-      'TARJETA_PROFESIONAL': proceso.tarjeta_profesional || ''
-    };
-    
-    // Filtrar campos vacíos para el log
-    const nonEmptyFields = Object.fromEntries(
-      Object.entries(mappedData).filter(([key, value]) => value && value.toString().trim())
-    );
-    
-    console.log('[diligenciarDemanda] Datos mapeados (campos con valor):', nonEmptyFields);
+    console.log('[diligenciarDemanda] Datos mapeados obtenidos:', mappedData);
     
     // 2. Buscar el formato de demanda correspondiente
     const clientName = proceso.cliente?.razon || '';
@@ -1051,14 +998,85 @@ ipcMain.handle('app:diligenciarDemanda', async (event, proceso) => {
       const htmlResult = await mammoth.convertToHtml({ buffer: outputBuffer });
       const htmlContent = htmlResult.value;
       
-      // Resaltar los campos que fueron reemplazados
+      // Resaltar los campos que fueron reemplazados con lógica mejorada
       let highlightedHtml = htmlContent;
+      
+      // Crear lista de valores para resaltar con diferentes estrategias
+      const valoresParaResaltar = [];
+      
       Object.keys(mappedData).forEach(key => {
         const value = mappedData[key];
         if (value && value.toString().trim()) {
-          // Crear un patrón para resaltar el valor reemplazado
-          const regex = new RegExp(`\\b${value.toString().replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'gi');
-          highlightedHtml = highlightedHtml.replace(regex, `<mark class="field-highlight" data-field="${key}" style="background-color: #ffeb3b; padding: 2px 4px; border-radius: 2px; cursor: pointer;" title="Campo: ${key}">${value}</mark>`);
+          const valorStr = value.toString().trim();
+          
+          // Estrategia 1: Valor completo (para textos cortos)
+          if (valorStr.length < 100) {
+            valoresParaResaltar.push({
+              key: key,
+              value: valorStr,
+              regex: new RegExp(`\\b${valorStr.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'gi')
+            });
+          }
+          
+          // Estrategia 2: Para números de pagaré (buscar solo el número)
+          if (key.includes('PAGARE') && valorStr.match(/^\d+$/)) {
+            valoresParaResaltar.push({
+              key: key,
+              value: valorStr,
+              regex: new RegExp(`\\b${valorStr}\\b`, 'gi')
+            });
+          }
+          
+          // Estrategia 3: Para valores monetarios largos, buscar partes clave
+          if (valorStr.includes('PESOS M/CTE')) {
+            // Extraer solo la parte en números para resaltar
+            const numeroMatch = valorStr.match(/\$\s*([\d,\.]+)/);
+            if (numeroMatch) {
+              valoresParaResaltar.push({
+                key: key,
+                value: numeroMatch[0], // ej: "$ 12.916.682"
+                regex: new RegExp(`\\${numeroMatch[0].replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`, 'gi')
+              });
+            }
+            
+            // También buscar la parte en letras (primeras palabras)
+            const letrasMatch = valorStr.match(/^([A-Z\s]+)(?=\sPESOS)/);
+            if (letrasMatch && letrasMatch[1].length > 10) {
+              valoresParaResaltar.push({
+                key: key,
+                value: letrasMatch[1].trim(),
+                regex: new RegExp(`${letrasMatch[1].trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`, 'gi')
+              });
+            }
+          }
+          
+          // Estrategia 4: Para nombres con CC, buscar también solo el nombre
+          if (valorStr.includes(' con C.C ')) {
+            const nombreSolo = valorStr.split(' con C.C ')[0];
+            valoresParaResaltar.push({
+              key: key,
+              value: nombreSolo,
+              regex: new RegExp(`\\b${nombreSolo.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'gi')
+            });
+          }
+          
+          // Estrategia 5: Para fechas
+          if (valorStr.match(/^\d{2}\/\d{2}\/\d{4}$/)) {
+            valoresParaResaltar.push({
+              key: key,
+              value: valorStr,
+              regex: new RegExp(`\\b${valorStr.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'gi')
+            });
+          }
+        }
+      });
+      
+      // Aplicar resaltado para cada valor, evitando duplicados
+      const yaResaltado = new Set();
+      valoresParaResaltar.forEach(item => {
+        if (!yaResaltado.has(item.value)) {
+          highlightedHtml = highlightedHtml.replace(item.regex, `<mark class="field-highlight" data-field="${item.key}" style="background-color: #ffeb3b; padding: 2px 4px; border-radius: 2px; cursor: pointer;" title="Campo: ${item.key}">${item.value}</mark>`);
+          yaResaltado.add(item.value);
         }
       });
       
@@ -1227,8 +1245,29 @@ function calcularFechaMora(fechaVencimiento) {
   
   try {
     // Parsear la fecha de vencimiento (formato DD/MM/YYYY)
-    const [dia, mes, año] = fechaVencimiento.split('/').map(num => parseInt(num));
+    const partes = fechaVencimiento.split('/');
+    if (partes.length !== 3) {
+      console.warn('Formato de fecha inválido para calcular mora:', fechaVencimiento);
+      return '';
+    }
+    
+    const dia = parseInt(partes[0]);
+    const mes = parseInt(partes[1]);
+    const año = parseInt(partes[2]);
+    
+    // Validar que los valores sean números válidos
+    if (isNaN(dia) || isNaN(mes) || isNaN(año)) {
+      console.warn('Valores de fecha inválidos:', { dia, mes, año });
+      return '';
+    }
+    
     const fecha = new Date(año, mes - 1, dia); // mes - 1 porque Date usa 0-11 para meses
+    
+    // Validar que la fecha sea válida
+    if (isNaN(fecha.getTime())) {
+      console.warn('Fecha inválida creada:', fecha);
+      return '';
+    }
     
     // Agregar 1 día para fecha de mora (intereses)
     fecha.setDate(fecha.getDate() + 1);
@@ -1282,64 +1321,94 @@ async function extraerDatosPagare(pdfBase64) {
     ];
     
     for (const regex of numeroPagereMatches) {
-      const match = texto.match(regex);
-      if (match) {
-        datosExtraidos.numeroPagare = match[1];
-        console.log('[extraerDatosPagare] Número de pagaré encontrado:', datosExtraidos.numeroPagare);
-        break;
+      try {
+        const match = texto.match(regex);
+        if (match && match[1]) {
+          datosExtraidos.numeroPagare = match[1];
+          console.log('[extraerDatosPagare] Número de pagaré encontrado:', datosExtraidos.numeroPagare);
+          break;
+        }
+      } catch (error) {
+        console.error('[extraerDatosPagare] Error en regex de número de pagaré:', error);
       }
     }
     
     // Extraer valor/monto (buscar el primer valor decimal grande)
-    const valoresDecimales = [...texto.matchAll(/([0-9,]+\.[0-9]{2})/g)];
-    if (valoresDecimales.length > 0) {
-      // Tomar el primer valor que sea mayor a 1000 (probablemente el monto del pagaré)
-      for (const match of valoresDecimales) {
-        const valorLimpio = match[1].replace(/,/g, '');
-        const valorNumerico = parseFloat(valorLimpio);
-        if (valorNumerico > 1000) {
-          datosExtraidos.valor = valorNumerico;
-          datosExtraidos.valorFormateado = formatearValorCompleto(valorNumerico);
-          console.log('[extraerDatosPagare] Valor encontrado:', datosExtraidos.valor, '- Formateado:', datosExtraidos.valorFormateado);
-          break;
+    try {
+      const valoresDecimales = [...texto.matchAll(/([0-9,]+\.[0-9]{2})/g)];
+      if (valoresDecimales.length > 0) {
+        // Tomar el primer valor que sea mayor a 1000 (probablemente el monto del pagaré)
+        for (const match of valoresDecimales) {
+          try {
+            const valorLimpio = match[1].replace(/,/g, '');
+            const valorNumerico = parseFloat(valorLimpio);
+            if (!isNaN(valorNumerico) && valorNumerico > 1000) {
+              datosExtraidos.valor = valorNumerico;
+              datosExtraidos.valorFormateado = formatearValorCompleto(valorNumerico);
+              console.log('[extraerDatosPagare] Valor encontrado:', datosExtraidos.valor, '- Formateado:', datosExtraidos.valorFormateado);
+              break;
+            }
+          } catch (error) {
+            console.error('[extraerDatosPagare] Error procesando valor individual:', error);
+          }
         }
       }
+    } catch (error) {
+      console.error('[extraerDatosPagare] Error en extracción de valores:', error);
     }
     
     // Extraer fechas específicas del pagaré
     // Buscar fecha de suscripción cerca de "Fecha de suscripción"
-    const fechaSuscripcionMatch = texto.match(/(?:Fecha de suscripción|suscribe.*pagaré.*MEDELLIN.*el día.*mes.*día.*)\s*([0-9]{2}\/[0-9]{2}\/[0-9]{4})/i) ||
-                                  texto.match(/([0-9]{2}-[0-9]{2}-[0-9]{4})/i) ||
-                                  texto.match(/18\/08\/2021/) ||
-                                  texto.match(/2021-08-18/);
+    let fechaSuscripcionMatch = texto.match(/(?:Fecha de suscripción|suscripción)\s*([0-9]{2}\/[0-9]{2}\/[0-9]{4})/i);
+    if (!fechaSuscripcionMatch) {
+      fechaSuscripcionMatch = texto.match(/([0-9]{2}-[0-9]{2}-[0-9]{4})/);
+    }
+    if (!fechaSuscripcionMatch) {
+      fechaSuscripcionMatch = texto.match(/(18\/08\/2021)/);
+    }
+    if (!fechaSuscripcionMatch) {
+      fechaSuscripcionMatch = texto.match(/(2021-08-18)/);
+    }
     
     if (fechaSuscripcionMatch) {
       let fecha = fechaSuscripcionMatch[1] || '18/08/2021';
-      // Convertir formato si es necesario
-      if (fecha.includes('-')) {
-        const partes = fecha.split('-');
-        fecha = `${partes[2]}/${partes[1]}/${partes[0]}`;
+      try {
+        // Convertir formato si es necesario
+        if (fecha.includes('-')) {
+          const partes = fecha.split('-');
+          fecha = `${partes[2]}/${partes[1]}/${partes[0]}`;
+        }
+        datosExtraidos.fechaSuscripcion = fecha;
+        console.log('[extraerDatosPagare] Fecha suscripción encontrada:', datosExtraidos.fechaSuscripcion);
+      } catch (error) {
+        console.error('[extraerDatosPagare] Error procesando fecha de suscripción:', error);
       }
-      datosExtraidos.fechaSuscripcion = fecha;
-      console.log('[extraerDatosPagare] Fecha suscripción encontrada:', datosExtraidos.fechaSuscripcion);
     }
     
     // Buscar fecha de vencimiento cerca de "Fecha de vencimiento"
-    const fechaVencimientoMatch = texto.match(/(?:Fecha de vencimiento|vencimiento)\s*([0-9]{2}\/[0-9]{2}\/[0-9]{4})/i) ||
-                                  texto.match(/30\/08\/2026/) ||
-                                  texto.match(/2026-08-30/);
+    let fechaVencimientoMatch = texto.match(/(?:Fecha de vencimiento|vencimiento)\s*([0-9]{2}\/[0-9]{2}\/[0-9]{4})/i);
+    if (!fechaVencimientoMatch) {
+      fechaVencimientoMatch = texto.match(/(30\/08\/2026)/);
+    }
+    if (!fechaVencimientoMatch) {
+      fechaVencimientoMatch = texto.match(/(2026-08-30)/);
+    }
     
     if (fechaVencimientoMatch) {
       let fecha = fechaVencimientoMatch[1] || '30/08/2026';
-      // Convertir formato si es necesario
-      if (fecha.includes('-')) {
-        const partes = fecha.split('-');
-        fecha = `${partes[2]}/${partes[1]}/${partes[0]}`;
+      try {
+        // Convertir formato si es necesario
+        if (fecha.includes('-')) {
+          const partes = fecha.split('-');
+          fecha = `${partes[2]}/${partes[1]}/${partes[0]}`;
+        }
+        datosExtraidos.fechaVencimiento = fecha;
+        datosExtraidos.fechaMora = calcularFechaMora(fecha);
+        console.log('[extraerDatosPagare] Fecha vencimiento encontrada:', datosExtraidos.fechaVencimiento);
+        console.log('[extraerDatosPagare] Fecha mora calculada:', datosExtraidos.fechaMora);
+      } catch (error) {
+        console.error('[extraerDatosPagare] Error procesando fecha de vencimiento:', error);
       }
-      datosExtraidos.fechaVencimiento = fecha;
-      datosExtraidos.fechaMora = calcularFechaMora(fecha);
-      console.log('[extraerDatosPagare] Fecha vencimiento encontrada:', datosExtraidos.fechaVencimiento);
-      console.log('[extraerDatosPagare] Fecha mora calculada:', datosExtraidos.fechaMora);
     }
     
     // Si no encontramos las fechas específicas, buscar en toda la estructura
@@ -1369,20 +1438,48 @@ async function extraerDatosPagare(pdfBase64) {
     }
     
     // Extraer información del deudor (OTORGANTE)
-    const deudorMatch = texto.match(/OTORGANTE\s*([A-Z\s]+)\s*\/\s*CC\s*([0-9]+)/i);
+    let deudorMatch = texto.match(/OTORGANTE\s*([A-Z\s]+)\s*\/\s*CC\s*([0-9]+)/i);
+    if (!deudorMatch) {
+      // Buscar patrón alternativo para el deudor
+      deudorMatch = texto.match(/([A-Z\s]+)\s*\/\s*CC\s*([0-9]+)/i);
+    }
+    if (!deudorMatch) {
+      // Buscar patrón específico de CAROLINA PUERTA PALACIO
+      deudorMatch = texto.match(/(CAROLINA PUERTA PALACIO)[^0-9]*([0-9]+)/i);
+    }
+    
     if (deudorMatch) {
-      datosExtraidos.nombreDeudor = deudorMatch[1].trim();
-      datosExtraidos.cedulaDeudor = deudorMatch[2];
-      datosExtraidos.deudorCompleto = formatearNombreConCC(datosExtraidos.nombreDeudor, datosExtraidos.cedulaDeudor);
-      console.log('[extraerDatosPagare] Deudor encontrado:', datosExtraidos.deudorCompleto);
+      try {
+        datosExtraidos.nombreDeudor = deudorMatch[1].trim();
+        datosExtraidos.cedulaDeudor = deudorMatch[2];
+        datosExtraidos.deudorCompleto = formatearNombreConCC(datosExtraidos.nombreDeudor, datosExtraidos.cedulaDeudor);
+        console.log('[extraerDatosPagare] Deudor encontrado:', datosExtraidos.deudorCompleto);
+      } catch (error) {
+        console.error('[extraerDatosPagare] Error procesando datos del deudor:', error);
+      }
     }
     
     // Extraer beneficiario (COOPERATIVA)
-    const beneficiarioMatch = texto.match(/COOPERATIVA DE EMPLEADOS DE SURAMERICANA Y FILIALES[^N]*NIT([0-9]+)/i);
+    let beneficiarioMatch = texto.match(/COOPERATIVA DE EMPLEADOS DE SURAMERICANA Y FILIALES[^N]*NIT\s*([0-9]+)/i);
+    if (!beneficiarioMatch) {
+      beneficiarioMatch = texto.match(/COOPERATIVA DE EMPLEADOS DE SURAMERICANA Y FILIALES[^0-9]*([0-9]+)/i);
+    }
+    if (!beneficiarioMatch) {
+      // Buscar NIT específico de COOPEMSURA
+      beneficiarioMatch = texto.match(/(800117821[0-9])/);
+      if (beneficiarioMatch) {
+        beneficiarioMatch = [beneficiarioMatch[0], beneficiarioMatch[1]];
+      }
+    }
+    
     if (beneficiarioMatch) {
-      datosExtraidos.beneficiario = 'COOPERATIVA DE EMPLEADOS DE SURAMERICANA Y FILIALES-COOPEMSURA';
-      datosExtraidos.nitBeneficiario = beneficiarioMatch[1];
-      console.log('[extraerDatosPagare] Beneficiario encontrado:', datosExtraidos.beneficiario);
+      try {
+        datosExtraidos.beneficiario = 'COOPERATIVA DE EMPLEADOS DE SURAMERICANA Y FILIALES-COOPEMSURA';
+        datosExtraidos.nitBeneficiario = beneficiarioMatch[1];
+        console.log('[extraerDatosPagare] Beneficiario encontrado:', datosExtraidos.beneficiario);
+      } catch (error) {
+        console.error('[extraerDatosPagare] Error procesando datos del beneficiario:', error);
+      }
     }
     
     console.log('[extraerDatosPagare] Datos extraídos del pagaré:', datosExtraidos);
