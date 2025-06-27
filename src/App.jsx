@@ -317,13 +317,15 @@ function App() {
     setMappedData(prev => ({ ...prev, [e.target.name]: e.target.value }));
   };
 
+
+
   const renderProcessList = () => {
     console.log('[React] Renderizando lista de procesos. Total de procesos en estado:', processes.length);
     console.log('[React] Procesos a mostrar:', processes);
     
     return (
     <Box>
-      <Typography variant="h4" gutterBottom>
+      <Typography variant="h4" gutterBottom sx={{ mb: 2 }}>
         Lista de Procesos
       </Typography>
       <Typography variant="body1" color="text.secondary" gutterBottom>

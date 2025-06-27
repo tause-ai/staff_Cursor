@@ -1,4 +1,4 @@
-# Staff2 Vite - Aplicación de Escritorio para Automatización de Demandas Legales
+# Staffbot - Aplicación de Escritorio para Automatización de Demandas Legales
 
 Una aplicación de escritorio construida con Electron, React y Material UI para automatizar el llenado de formatos de demandas legales. La aplicación se conecta a APIs internas de intranet para obtener datos de procesos y generar documentos automáticamente.
 
@@ -42,7 +42,7 @@ npm run electron
 ## 📁 Estructura del Proyecto
 
 ```
-staff2-vite/
+staffbot/
 ├── src/
 │   ├── App.jsx          # Componente principal de React
 │   ├── main.jsx         # Punto de entrada de React

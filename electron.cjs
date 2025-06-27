@@ -995,7 +995,7 @@ ipcMain.handle('app:diligenciarPortada', async (event, proceso) => {
     
     // 6. Guardar el archivo en la carpeta de Documentos del usuario
     const documentsPath = app.getPath('documents');
-    const outputDir = path.join(documentsPath, 'Portadas_Staff2');
+    const outputDir = path.join(documentsPath, 'Portadas_Staffbot');
     await fs.mkdir(outputDir, { recursive: true });
     
     const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
@@ -1135,7 +1135,7 @@ ipcMain.handle('app:diligenciarDemanda', async (event, proceso) => {
     
     // 6. Guardar el archivo en la carpeta de Documentos del usuario
     const documentsPath = app.getPath('documents');
-    const outputDir = path.join(documentsPath, 'Demandas_Staff2');
+    const outputDir = path.join(documentsPath, 'Demandas_Staffbot');
     await fs.mkdir(outputDir, { recursive: true });
     
     const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
