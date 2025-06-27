@@ -11,6 +11,7 @@ const InspectModule = require('docxtemplater/js/inspect-module.js');
 const { NumerosALetras } = require('numero-a-letras');
 const mammoth = require('mammoth');
 
+
 const iModule = InspectModule();
 let mainWindow;
 let isFetchingProcesses = false;
@@ -612,6 +613,8 @@ async function getProcessMappedData(process) {
       'LUGAR_PAGARE': process.lugar_pagare || '',
       
       // Campos de capital e intereses (usar el valor formateado del PDF)
+      'CAPITAL': datosPagare.valorFormateado || formatearValorCompleto(process.valor) || '',
+      'CAPITAL_2': datosPagare.valorFormateado || formatearValorCompleto(process.valor) || '', // Mismo valor para segundo capital
       'CAPITAL_INSOLUTO': datosPagare.valorFormateado || formatearValorCompleto(process.valor) || '',
       'CAPITAL_INSOLUTO_2': datosPagare.valorFormateado || formatearValorCompleto(process.valor) || '', // Mismo valor para segundo capital
       'CAPITAL_INSOLUTO_3': datosPagare.valorFormateado || formatearValorCompleto(process.valor) || '', // Mismo valor para tercer capital
@@ -848,6 +851,8 @@ async function getProcessCoverMappedData(process) {
       'FECHA_MORA': datosPagare.fechaMora || calcularFechaMora(datosPagare.fechaVencimiento) || '',
       'FECHA_DE_MORA': datosPagare.fechaMora || calcularFechaMora(datosPagare.fechaVencimiento) || '',
       'MORA': datosPagare.fechaMora || calcularFechaMora(datosPagare.fechaVencimiento) || '',
+      'CAPITAL': datosPagare.valorFormateado || formatearValorCompleto(process.valor) || '',
+      'CAPITAL_2': datosPagare.valorFormateado || formatearValorCompleto(process.valor) || '', // Mismo valor para segundo capital
       'CAPITAL_INSOLUTO': datosPagare.valorFormateado || formatearValorCompleto(process.valor) || '',
       'CAPITAL_INSOLUTO_2': datosPagare.valorFormateado || formatearValorCompleto(process.valor) || '', // Mismo valor para segundo capital
       'CAPITAL_INSOLUTO_3': datosPagare.valorFormateado || formatearValorCompleto(process.valor) || '', // Mismo valor para tercer capital
@@ -1637,4 +1642,4 @@ async function extraerDatosPagare(pdfBase64) {
     console.error('[extraerDatosPagare] Error al extraer datos del pagaré:', error);
     return {};
   }
-} 
+}
