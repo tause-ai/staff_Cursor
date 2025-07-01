@@ -992,7 +992,7 @@ async function getProcessCoverMappedData(process) {
       
       // Demandados (hasta 3 como se ve en las plantillas) - priorizar datos del PDF
       'DEMANDADO_1': datosPagare.deudorCompleto || formatearNombreConCC(deudorPrincipal.nombre, deudorPrincipal.cedula || deudorPrincipal.documento),
-      'DEMANDADO_2': formatearNombreConCC(deudorSecundario.nombre, deudorSecundario.cedula || deudorSecundario.documento),
+      'DEMANDADO_2': datosPagare.codeudorCompleto || formatearNombreConCC(deudorSecundario.nombre, deudorSecundario.cedula || deudorSecundario.documento),
       'DEMANDADO_3': deudores.length > 2 ? formatearNombreConCC(deudores[2].nombre, deudores[2].cedula || deudores[2].documento) : '',
       
       // Campos adicionales que podrían aparecer en algunas portadas
@@ -1039,7 +1039,21 @@ async function getProcessCoverMappedData(process) {
       'DIRECCION_NOTIFICACION': deudorPrincipal.direccion || '',
       'DIRECCION_NOTIFICACION_2': deudorSecundario.direccion || '',
       'CORREO': deudorPrincipal.email || '',
-      'CORREO_2': deudorSecundario.email || ''
+      'CORREO_2': deudorSecundario.email || '',
+      
+      // Campos específicos de codeudor (priorizando datos del PDF)
+      'DEUDOR_2': datosPagare.codeudorCompleto || formatearNombreConCC(deudorSecundario.nombre, deudorSecundario.cedula || deudorSecundario.documento),
+      'CODEUDOR': datosPagare.codeudorCompleto || formatearNombreConCC(deudorSecundario.nombre, deudorSecundario.cedula || deudorSecundario.documento),
+      'NOMBRE_CODEUDOR': datosPagare.codeudorCompleto || formatearNombreConCC(deudorSecundario.nombre, deudorSecundario.cedula || deudorSecundario.documento),
+      'NOMBRES_CODEUDOR': datosPagare.codeudorCompleto || formatearNombreConCC(deudorSecundario.nombre, deudorSecundario.cedula || deudorSecundario.documento),
+      'CEDULA_CODEUDOR': datosPagare.cedulaCodeudor || deudorSecundario.cedula || deudorSecundario.documento || '',
+      'DOCUMENTO_CODEUDOR': datosPagare.cedulaCodeudor || deudorSecundario.cedula || deudorSecundario.documento || '',
+      'CC_CODEUDOR': datosPagare.cedulaCodeudor || deudorSecundario.cedula || deudorSecundario.documento || '',
+      'DIRECCION_CODEUDOR': deudorSecundario.direccion || '',
+      'TELEFONO_CODEUDOR': deudorSecundario.telefono || '',
+      'EMAIL_CODEUDOR': deudorSecundario.email || '',
+      'CORREO_CODEUDOR': deudorSecundario.email || '',
+      'CIUDAD_CODEUDOR': deudorSecundario.ciudad || ''
     };
 
     // 5. Filtrar solo los campos que requiere la plantilla de portada específica
@@ -1770,7 +1784,7 @@ async function extraerDatosPagare(pdfBase64) {
     // Extraer información del deudor y codeudor (OTORGANTES)
     // Buscar múltiples patrones de deudores
     const patronesDeudor = [
-      /OTORGANTE[S]?\s*([A-Z\s]+)\s*\/\s*CC\s*([0-9]+)/gi,
+      /(?:OTORGANTE[S]?|CODEUDOR)\s*([A-Z\s]+)\s*\/\s*CC\s*([0-9]+)/gi,
       /([A-Z\s]+)\s*\/\s*CC\s*([0-9]+)/gi,
       /([A-Z\s]+)\s*con\s*C\.C\.\s*([0-9]+)/gi,
       /([A-Z\s]+)\s*identificad[ao]\s*con\s*C\.C\.\s*No\.\s*([0-9]+)/gi
@@ -1782,8 +1796,11 @@ async function extraerDatosPagare(pdfBase64) {
       const matches = [...texto.matchAll(patron)];
       for (const match of matches) {
         if (match[1] && match[2]) {
-          const nombre = match[1].trim();
+          let nombre = match[1].trim();
           const cedula = match[2];
+          
+          // Limpiar el nombre eliminando palabras de rol
+          nombre = nombre.replace(/^(OTORGANTE[S]?|CODEUDOR)\s*/gi, '').trim();
           
           // Filtrar nombres que sean demasiado cortos o que contengan palabras no relevantes
           if (nombre.length > 5 && 
