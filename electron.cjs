@@ -601,17 +601,43 @@ async function getProcessMappedData(process) {
       console.log('[getProcessMappedData] Usando campos básicos:', templateFields);
     }
     
-    // 2. Preparar datos del proceso
+    // 2. Preparar datos del proceso - Mejorado para manejar múltiples deudores
     let deudores = [];
+    
+    // Estrategia 1: Si hay array de deudores en la API
     if (process.deudores && Array.isArray(process.deudores)) {
         deudores = process.deudores;
-    } else if (process.deudor) {
+        console.log('[getProcessMappedData] Encontrados deudores en array:', deudores.length);
+    } 
+    // Estrategia 2: Si hay deudor y codeudor por separado
+    else if (process.deudor && process.codeudor) {
+        deudores = [process.deudor, process.codeudor];
+        console.log('[getProcessMappedData] Encontrados deudor y codeudor por separado');
+    }
+    // Estrategia 3: Solo deudor principal
+    else if (process.deudor) {
         deudores = [process.deudor];
+        console.log('[getProcessMappedData] Solo deudor principal encontrado');
     }
 
     const cliente = process.cliente || {};
     const deudorPrincipal = deudores.length > 0 ? deudores[0] : {};
     const deudorSecundario = deudores.length > 1 ? deudores[1] : {};
+    
+    // Log para debugging
+    console.log('[getProcessMappedData] Deudor principal:', {
+      nombre: deudorPrincipal.nombre,
+      cedula: deudorPrincipal.cedula || deudorPrincipal.documento,
+      direccion: deudorPrincipal.direccion
+    });
+    
+    if (deudorSecundario.nombre) {
+      console.log('[getProcessMappedData] Deudor secundario (codeudor):', {
+        nombre: deudorSecundario.nombre,
+        cedula: deudorSecundario.cedula || deudorSecundario.documento,
+        direccion: deudorSecundario.direccion
+      });
+    }
     
     // 3. Extraer datos del PDF pagaré si está disponible
     let datosPagare = {};
@@ -685,26 +711,37 @@ async function getProcessMappedData(process) {
       'DEUDOR': datosPagare.deudorCompleto || formatearNombreConCC(deudorPrincipal.nombre, deudorPrincipal.cedula || deudorPrincipal.documento),
       'NOMBRE_DEUDOR': datosPagare.deudorCompleto || formatearNombreConCC(deudorPrincipal.nombre, deudorPrincipal.cedula || deudorPrincipal.documento),
       'NOMBRES_DEUDOR': datosPagare.deudorCompleto || formatearNombreConCC(deudorPrincipal.nombre, deudorPrincipal.cedula || deudorPrincipal.documento),
-      'CEDULA_DEUDOR': deudorPrincipal.cedula || deudorPrincipal.documento || '',
-      'DOCUMENTO_DEUDOR': deudorPrincipal.cedula || deudorPrincipal.documento || '',
-      'CC_DEUDOR': deudorPrincipal.cedula || deudorPrincipal.documento || '',
+      'CEDULA_DEUDOR': datosPagare.cedulaDeudor || deudorPrincipal.cedula || deudorPrincipal.documento || '',
+      'DOCUMENTO_DEUDOR': datosPagare.cedulaDeudor || deudorPrincipal.cedula || deudorPrincipal.documento || '',
+      'CC_DEUDOR': datosPagare.cedulaDeudor || deudorPrincipal.cedula || deudorPrincipal.documento || '',
       'DIRECCION_DEUDOR': deudorPrincipal.direccion || '',
       'TELEFONO_DEUDOR': deudorPrincipal.telefono || '',
       'EMAIL_DEUDOR': deudorPrincipal.email || '',
       'CIUDAD_DEUDOR': deudorPrincipal.ciudad || '',
       
-      // Información del demandado secundario (fiadores con formato nombre + CC)
-      'DEMANDADO_2': formatearNombreConCC(deudorSecundario.nombre, deudorSecundario.cedula || deudorSecundario.documento),
-      'DEUDOR_2': formatearNombreConCC(deudorSecundario.nombre, deudorSecundario.cedula || deudorSecundario.documento),
-      'NOMBRE_DEUDOR_2': formatearNombreConCC(deudorSecundario.nombre, deudorSecundario.cedula || deudorSecundario.documento),
-      'CEDULA_DEUDOR_2': deudorSecundario.cedula || deudorSecundario.documento || '',
-      'DOCUMENTO_DEUDOR_2': deudorSecundario.cedula || deudorSecundario.documento || '',
+      // Información del demandado secundario/codeudor (priorizar datos del PDF, luego API)
+      'DEMANDADO_2': datosPagare.codeudorCompleto || formatearNombreConCC(deudorSecundario.nombre, deudorSecundario.cedula || deudorSecundario.documento),
+      'DEUDOR_2': datosPagare.codeudorCompleto || formatearNombreConCC(deudorSecundario.nombre, deudorSecundario.cedula || deudorSecundario.documento),
+      'CODEUDOR': datosPagare.codeudorCompleto || formatearNombreConCC(deudorSecundario.nombre, deudorSecundario.cedula || deudorSecundario.documento),
+      'NOMBRE_DEUDOR_2': datosPagare.codeudorCompleto || formatearNombreConCC(deudorSecundario.nombre, deudorSecundario.cedula || deudorSecundario.documento),
+      'NOMBRE_CODEUDOR': datosPagare.codeudorCompleto || formatearNombreConCC(deudorSecundario.nombre, deudorSecundario.cedula || deudorSecundario.documento),
+      'NOMBRES_CODEUDOR': datosPagare.codeudorCompleto || formatearNombreConCC(deudorSecundario.nombre, deudorSecundario.cedula || deudorSecundario.documento),
+      'CEDULA_DEUDOR_2': datosPagare.cedulaCodeudor || deudorSecundario.cedula || deudorSecundario.documento || '',
+      'CEDULA_CODEUDOR': datosPagare.cedulaCodeudor || deudorSecundario.cedula || deudorSecundario.documento || '',
+      'DOCUMENTO_DEUDOR_2': datosPagare.cedulaCodeudor || deudorSecundario.cedula || deudorSecundario.documento || '',
+      'DOCUMENTO_CODEUDOR': datosPagare.cedulaCodeudor || deudorSecundario.cedula || deudorSecundario.documento || '',
+      'CC_CODEUDOR': datosPagare.cedulaCodeudor || deudorSecundario.cedula || deudorSecundario.documento || '',
       
       // Información de notificación
       'DIRECCION_NOTIFICACION': deudorPrincipal.direccion || '',
       'DIRECCION_NOTIFICACION_2': deudorSecundario.direccion || '', // Para segundo deudor
+      'DIRECCION_CODEUDOR': deudorSecundario.direccion || '',
+      'TELEFONO_CODEUDOR': deudorSecundario.telefono || '',
+      'EMAIL_CODEUDOR': deudorSecundario.email || '',
+      'CIUDAD_CODEUDOR': deudorSecundario.ciudad || '',
       'CORREO': deudorPrincipal.email || '',
       'CORREO_2': deudorSecundario.email || '', // Para segundo deudor
+      'CORREO_CODEUDOR': deudorSecundario.email || '',
       'CORREO_NOTIFICACION': deudorPrincipal.email || '',
       'EMAIL_NOTIFICACION': deudorPrincipal.email || '',
       
@@ -782,6 +819,15 @@ async function getProcessMappedData(process) {
     const nonEmptyFields = Object.fromEntries(
       Object.entries(mappedData).filter(([key, value]) => value && value.toString().trim())
     );
+    
+    // Log específico para campos de codeudor si existen
+    const codeudorFields = Object.fromEntries(
+      Object.entries(nonEmptyFields).filter(([key, value]) => key.includes('CODEUDOR') || key.includes('_2'))
+    );
+    
+    if (Object.keys(codeudorFields).length > 0) {
+      console.log(`[getProcessMappedData] DEBUG - Campos de CODEUDOR encontrados:`, codeudorFields);
+    }
     
     console.log(`[getProcessMappedData] Mapeo completado. Campos con valor (${Object.keys(nonEmptyFields).length}/${templateFields.length}):`, nonEmptyFields);
     
@@ -1721,26 +1767,58 @@ async function extraerDatosPagare(pdfBase64) {
       }
     }
     
-    // Extraer información del deudor (OTORGANTE)
-    let deudorMatch = texto.match(/OTORGANTE\s*([A-Z\s]+)\s*\/\s*CC\s*([0-9]+)/i);
-    if (!deudorMatch) {
-      // Buscar patrón alternativo para el deudor
-      deudorMatch = texto.match(/([A-Z\s]+)\s*\/\s*CC\s*([0-9]+)/i);
-    }
-    if (!deudorMatch) {
-      // Buscar patrón específico de CAROLINA PUERTA PALACIO
-      deudorMatch = texto.match(/(CAROLINA PUERTA PALACIO)[^0-9]*([0-9]+)/i);
+    // Extraer información del deudor y codeudor (OTORGANTES)
+    // Buscar múltiples patrones de deudores
+    const patronesDeudor = [
+      /OTORGANTE[S]?\s*([A-Z\s]+)\s*\/\s*CC\s*([0-9]+)/gi,
+      /([A-Z\s]+)\s*\/\s*CC\s*([0-9]+)/gi,
+      /([A-Z\s]+)\s*con\s*C\.C\.\s*([0-9]+)/gi,
+      /([A-Z\s]+)\s*identificad[ao]\s*con\s*C\.C\.\s*No\.\s*([0-9]+)/gi
+    ];
+    
+    let deudoresEncontrados = [];
+    
+    for (const patron of patronesDeudor) {
+      const matches = [...texto.matchAll(patron)];
+      for (const match of matches) {
+        if (match[1] && match[2]) {
+          const nombre = match[1].trim();
+          const cedula = match[2];
+          
+          // Filtrar nombres que sean demasiado cortos o que contengan palabras no relevantes
+          if (nombre.length > 5 && 
+              !nombre.includes('COOPERATIVA') && 
+              !nombre.includes('SURAMERICANA') &&
+              !nombre.includes('FILIALES') &&
+              !nombre.includes('COOPEMSURA') &&
+              !deudoresEncontrados.some(d => d.cedula === cedula)) {
+            
+            deudoresEncontrados.push({
+              nombre: nombre,
+              cedula: cedula,
+              completo: formatearNombreConCC(nombre, cedula)
+            });
+          }
+        }
+      }
     }
     
-    if (deudorMatch) {
-      try {
-        datosExtraidos.nombreDeudor = deudorMatch[1].trim();
-        datosExtraidos.cedulaDeudor = deudorMatch[2];
-        datosExtraidos.deudorCompleto = formatearNombreConCC(datosExtraidos.nombreDeudor, datosExtraidos.cedulaDeudor);
-        console.log('[extraerDatosPagare] Deudor encontrado:', datosExtraidos.deudorCompleto);
-      } catch (error) {
-        console.error('[extraerDatosPagare] Error procesando datos del deudor:', error);
+    // Asignar deudores encontrados
+    if (deudoresEncontrados.length > 0) {
+      datosExtraidos.nombreDeudor = deudoresEncontrados[0].nombre;
+      datosExtraidos.cedulaDeudor = deudoresEncontrados[0].cedula;
+      datosExtraidos.deudorCompleto = deudoresEncontrados[0].completo;
+      console.log('[extraerDatosPagare] Deudor principal encontrado:', datosExtraidos.deudorCompleto);
+      
+      // Si hay un segundo deudor (codeudor)
+      if (deudoresEncontrados.length > 1) {
+        datosExtraidos.nombreCodeudor = deudoresEncontrados[1].nombre;
+        datosExtraidos.cedulaCodeudor = deudoresEncontrados[1].cedula;
+        datosExtraidos.codeudorCompleto = deudoresEncontrados[1].completo;
+        console.log('[extraerDatosPagare] Codeudor encontrado:', datosExtraidos.codeudorCompleto);
       }
+      
+      console.log('[extraerDatosPagare] Total deudores encontrados en PDF:', deudoresEncontrados.length);
     }
     
     // Extraer beneficiario (COOPERATIVA)
