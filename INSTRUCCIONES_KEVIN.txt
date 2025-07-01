@@ -1,0 +1,35 @@
+STAFFBOT - INSTRUCCIONES PARA KEVIN
+=====================================
+
+ARCHIVO A USAR:
+✅ Staffbot - Generador de Demandas-Portable-1.0.0.exe (91MB)
+
+INSTRUCCIONES:
+1. Descargar el archivo "Staffbot - Generador de Demandas-Portable-1.0.0.exe"
+
+2. Crear una carpeta en el escritorio llamada "Staffbot"
+
+3. Copiar el archivo .exe dentro de esa carpeta
+
+4. Hacer DOBLE CLIC en el archivo .exe
+
+5. ¡LISTO! La aplicación se abre directamente SIN INSTALACIÓN
+
+IMPORTANTE:
+- NO es un instalador, es la aplicación completa
+- NO necesita instalación
+- NO hay conflictos con versiones anteriores
+- Funciona inmediatamente
+- Guarda los archivos en las carpetas:
+  * Demandas_Staffbot (en el escritorio)
+  * Portadas_Staffbot (en el escritorio)
+
+CARACTERÍSTICAS:
+✅ 33 procesos disponibles
+✅ Campo CAPITAL funcionando
+✅ Generación de demandas y portadas
+✅ Sistema offline con caché
+✅ Ícono personalizado
+
+SOPORTE:
+Si hay algún problema, contactar a Felipe Tause 
