@@ -686,8 +686,8 @@ async function getProcessMappedData(process) {
       'CIUDAD': process.ciudad || deudorPrincipal.ciudad || cliente.ciudad || 'Bogotá D.C.',
       'DOMICILIO': deudorPrincipal.ciudad || process.ciudad || 'Bogotá D.C.',
       
-      // Información de cuantía (priorizar datos del PDF) - Múltiples variaciones
-      'CUANTIA': process.cuantia || process.valor || 'MÍNIMA',
+      // Información de cuantía (calcular automáticamente basado en el valor) - Múltiples variaciones
+      'CUANTIA': calcularCuantia(datosPagare.valor || process.valor) || process.cuantia || 'MÍNIMA',
       'VALOR': datosPagare.valorFormateado || formatearValorCompleto(process.valor || process.cuantia) || process.valor || process.cuantia || '',
       'MONTO': datosPagare.valorFormateado || formatearValorCompleto(process.monto || process.valor || process.cuantia) || process.monto || process.valor || process.cuantia || '',
       'VALOR_CAPITAL': datosPagare.valorFormateado || formatearValorCompleto(process.valor_capital || process.valor) || process.valor_capital || process.valor || '',
@@ -987,8 +987,8 @@ async function getProcessCoverMappedData(process) {
       // Domicilio (diferente a ciudad, más específico para portadas)
       'DOMICILIO': deudorPrincipal.ciudad || process.ciudad || cliente.ciudad || 'Bogotá D.C.',
       
-      // Cuantía (campo común en portadas)
-      'CUANTIA': process.cuantia || process.valor || 'MÍNIMA',
+      // Cuantía (calcular automáticamente basado en el valor)
+      'CUANTIA': calcularCuantia(datosPagare.valor || process.valor) || process.cuantia || 'MÍNIMA',
       
       // Demandados (hasta 3 como se ve en las plantillas) - priorizar datos del PDF
       'DEMANDADO_1': datosPagare.deudorCompleto || formatearNombreConCC(deudorPrincipal.nombre, deudorPrincipal.cedula || deudorPrincipal.documento),
@@ -1625,6 +1625,75 @@ function calcularFechaMora(fechaVencimiento) {
   } catch (error) {
     console.error('Error calculando fecha de mora:', error);
     return '';
+  }
+}
+
+// Función para calcular cuantía basada en el valor del proceso
+function calcularCuantia(valor) {
+  if (!valor) return 'MÍNIMA';
+  
+  // Convertir a número si es string
+  let valorNumerico;
+  if (typeof valor === 'string') {
+    // Limpiar el string: remover símbolos y convertir puntos/comas de separadores de miles
+    let valorLimpio = valor.replace(/[^\d.,]/g, ''); // Solo dígitos, puntos y comas
+    
+    // Si tiene formato colombiano (puntos como separadores de miles y coma decimal)
+    // Ej: "71.061.959,00" -> "71061959.00"
+    if (valorLimpio.includes('.') && valorLimpio.includes(',')) {
+      valorLimpio = valorLimpio.replace(/\./g, '').replace(',', '.');
+    }
+    // Si tiene formato internacional con comas como separadores de miles y punto decimal
+    // Ej: "71,061,959.00" -> "71061959.00"
+    else if (valorLimpio.includes(',') && valorLimpio.includes('.')) {
+      const partes = valorLimpio.split('.');
+      if (partes.length === 2 && partes[1].length <= 2) {
+        // El punto es decimal, las comas son separadores de miles
+        valorLimpio = valorLimpio.replace(/,/g, '');
+      } else {
+        // Tratar todo como separadores de miles
+        valorLimpio = valorLimpio.replace(/[,.]/g, '');
+      }
+    }
+    // Si solo tiene puntos (formato internacional o separadores de miles)
+    // Ej: "71.061.959" -> "71061959"
+    else if (valorLimpio.includes('.')) {
+      const partes = valorLimpio.split('.');
+      if (partes.length > 2) {
+        // Múltiples puntos = separadores de miles
+        valorLimpio = valorLimpio.replace(/\./g, '');
+      }
+      // Si solo hay un punto y la parte decimal tiene más de 2 dígitos, probablemente son separadores de miles
+      else if (partes[1] && partes[1].length > 2) {
+        valorLimpio = valorLimpio.replace(/\./g, '');
+      }
+    }
+    // Si solo tiene comas, tratarlas como separadores de miles
+    // Ej: "71,061,959" -> "71061959"
+    else if (valorLimpio.includes(',')) {
+      const partes = valorLimpio.split(',');
+      if (partes.length > 2) {
+        valorLimpio = valorLimpio.replace(/,/g, '');
+      }
+    }
+    
+    valorNumerico = parseFloat(valorLimpio);
+  } else {
+    valorNumerico = valor;
+  }
+  
+  if (isNaN(valorNumerico)) return 'MÍNIMA';
+  
+  // Valores límite basados en SMLMV 2024/2025
+  const LIMITE_MINIMA = 56940000;    // 40 SMLMV
+  const LIMITE_MENOR = 213525000;    // 150 SMLMV
+  
+  if (valorNumerico <= LIMITE_MINIMA) {
+    return 'MÍNIMA';
+  } else if (valorNumerico <= LIMITE_MENOR) {
+    return 'MENOR';
+  } else {
+    return 'MAYOR';
   }
 }
 
