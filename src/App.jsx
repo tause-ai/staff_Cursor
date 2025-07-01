@@ -92,6 +92,10 @@ function App() {
   const [syncStatus, setSyncStatus] = useState(null);
   const [syncLoading, setSyncLoading] = useState(false);
   const [lastSync, setLastSync] = useState(null);
+  
+  // Estados para el buscador de procesos
+  const [searchTerm, setSearchTerm] = useState('');
+  const [processStatus, setProcessStatus] = useState({}); // Para trackear el estado de cada proceso
 
   useEffect(() => {
     const loadProcesses = async () => {
@@ -138,6 +142,16 @@ function App() {
       }
     };
 
+    // Cargar estado de procesos completados desde localStorage
+    const savedStatus = localStorage.getItem('staffbot-process-status');
+    if (savedStatus) {
+      try {
+        setProcessStatus(JSON.parse(savedStatus));
+      } catch (e) {
+        console.warn('Error al cargar estado de procesos desde localStorage:', e);
+      }
+    }
+
     loadProcesses();
     
     // Configurar listener para recarga
@@ -161,9 +175,9 @@ function App() {
     }
   }, [resultadoFinal]);
 
-  // Cargar datos de sincronización cuando se accede a configuración
+  // Cargar datos de sincronización cuando se accede a configuración (solo una vez)
   useEffect(() => {
-    if (screen === 'config') {
+    if (screen === 'config' && apiIds.length === 0 && localIds.length === 0 && !syncLoading) {
       loadSyncData();
     }
   }, [screen]);
@@ -186,6 +200,8 @@ function App() {
       
       // Si el diligenciado fue exitoso, navegar automáticamente al Editor de Demanda
       if (resultado.success) {
+        // Marcar proceso como completado
+        markProcessAsCompleted(selectedProcess.proceso_id);
         setScreen('demandEditor');
       }
     });
@@ -393,9 +409,42 @@ function App() {
     }
   };
 
+  // Función para filtrar procesos por ID
+  const getFilteredProcesses = () => {
+    if (!searchTerm.trim()) {
+      return processes;
+    }
+    return processes.filter(process => 
+      process.proceso_id.toString().includes(searchTerm.trim())
+    );
+  };
+
+  // Función para marcar proceso como procesado
+  const markProcessAsCompleted = (processId) => {
+    const newStatus = {
+      ...processStatus,
+      [processId]: 'completed'
+    };
+    setProcessStatus(newStatus);
+    
+    // Guardar en localStorage para persistencia
+    try {
+      localStorage.setItem('staffbot-process-status', JSON.stringify(newStatus));
+    } catch (e) {
+      console.warn('Error al guardar estado de procesos en localStorage:', e);
+    }
+  };
+
+  // Función para obtener el estado de un proceso
+  const getProcessStatus = (processId) => {
+    return processStatus[processId] || 'pending';
+  };
+
   const renderProcessList = () => {
     console.log('[React] Renderizando lista de procesos. Total de procesos en estado:', processes.length);
     console.log('[React] Procesos a mostrar:', processes);
+    
+    const filteredProcesses = getFilteredProcesses();
     
     return (
     <Box>
@@ -405,41 +454,86 @@ function App() {
       <Typography variant="body1" color="text.secondary" gutterBottom>
         Procesos del día disponibles para diligenciar.
       </Typography>
+      
+      {/* Buscador de procesos */}
+      <Box sx={{ mb: 3 }}>
+        <TextField
+          fullWidth
+          variant="outlined"
+          placeholder="Buscar proceso por ID..."
+          value={searchTerm}
+          onChange={(e) => setSearchTerm(e.target.value)}
+          InputProps={{
+            startAdornment: (
+              <Box sx={{ mr: 1 }}>🔍</Box>
+            ),
+          }}
+          sx={{ maxWidth: 400 }}
+        />
+      </Box>
+      
       <Typography variant="subtitle1" color="primary" sx={{ mb: 2 }}>
-        Procesos listados: <strong>{processes.length}</strong>
+        Procesos mostrados: <strong>{filteredProcesses.length}</strong> de <strong>{processes.length}</strong> total
       </Typography>
       {loading && <Typography sx={{ mt: 2 }}>Cargando procesos desde la API...</Typography>}
       {error && <Chip label={error} color="error" sx={{ mt: 2 }} />}
       
       <Grid container spacing={3} sx={{ mt: 2 }}>
-        {processes.map((process) => (
-          <Grid item xs={12} md={6} lg={4} key={process.proceso_id}>
-            <Card>
-              <CardContent>
-                <Typography variant="h6" gutterBottom>
-                  Cliente: {process.cliente?.razon || 'No especificado'}
-                </Typography>
-                <Typography variant="body1" color="text.secondary">
-                  Deudor: {process.deudor?.nombre || 'No especificado'}
-                </Typography>
-                <Typography variant="caption" color="text.secondary" sx={{ mt: 1, display: 'block' }}>
-                  ID Proceso: {process.proceso_id}
-                </Typography>
-              </CardContent>
-              <CardActions>
-                <Button 
-                  size="small" 
-                  variant="contained"
-                  onClick={() => handleProcessSelect(process)}
-                  disabled={loading}
-                >
-                  Ver Detalle
-                </Button>
-              </CardActions>
-            </Card>
-          </Grid>
-        ))}
+        {filteredProcesses.map((process) => {
+          const status = getProcessStatus(process.proceso_id);
+          return (
+            <Grid item xs={12} md={6} lg={4} key={process.proceso_id}>
+              <Card sx={{ 
+                border: status === 'completed' ? '2px solid #4caf50' : 'none'
+              }}>
+                <CardContent>
+                  <Typography variant="h6" gutterBottom>
+                    Cliente: {process.cliente?.razon || 'No especificado'}
+                  </Typography>
+                  <Typography variant="body1" color="text.secondary">
+                    Deudor: {process.deudor?.nombre || 'No especificado'}
+                  </Typography>
+                  <Typography variant="caption" color="text.secondary" sx={{ mt: 1, display: 'block' }}>
+                    ID Proceso: {process.proceso_id}
+                  </Typography>
+                </CardContent>
+                <CardActions sx={{ justifyContent: 'space-between', alignItems: 'center' }}>
+                  <Chip 
+                    label={status === 'completed' ? 'Completado' : 'Pendiente'}
+                    color={status === 'completed' ? 'success' : 'warning'}
+                    size="small"
+                    icon={status === 'completed' ? <CheckCircleIcon /> : <StarIcon />}
+                  />
+                  <Button 
+                    size="small" 
+                    variant="contained"
+                    onClick={() => handleProcessSelect(process)}
+                    disabled={loading}
+                  >
+                    Ver Detalle
+                  </Button>
+                </CardActions>
+              </Card>
+            </Grid>
+          );
+        })}
       </Grid>
+      
+      {/* Mensaje cuando no hay resultados de búsqueda */}
+      {searchTerm && filteredProcesses.length === 0 && (
+        <Box sx={{ textAlign: 'center', mt: 4 }}>
+          <Typography variant="h6" color="text.secondary">
+            No se encontraron procesos con ID: "{searchTerm}"
+          </Typography>
+          <Button 
+            variant="outlined" 
+            onClick={() => setSearchTerm('')}
+            sx={{ mt: 2 }}
+          >
+            Limpiar búsqueda
+          </Button>
+        </Box>
+      )}
     </Box>
   )};
 

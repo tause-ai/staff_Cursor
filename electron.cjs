@@ -274,12 +274,6 @@ ipcMain.handle('app:syncProcesses', async () => {
   try {
     const localDataPath = path.join(app.getPath('userData'), '..', 'Electron', 'procesos_del_dia.json');
     
-    // Obtener IDs de la API
-    const apiIdsResult = await ipcMain.emit('app:getApiProcessIds');
-    if (!apiIdsResult || !apiIdsResult.success) {
-      throw new Error('No se pudieron obtener los IDs de la API');
-    }
-    
     // Obtener procesos locales
     const localData = await fs.readFile(localDataPath, 'utf-8');
     const localProcesses = JSON.parse(localData);
