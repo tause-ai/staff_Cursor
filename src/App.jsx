@@ -85,6 +85,13 @@ function App() {
   // Estados para los datos de portada
   const [coverTemplateFields, setCoverTemplateFields] = useState([]);
   const [coverMappedData, setCoverMappedData] = useState(null);
+  
+  // Estados para la configuración/sincronización
+  const [apiIds, setApiIds] = useState([]);
+  const [localIds, setLocalIds] = useState([]);
+  const [syncStatus, setSyncStatus] = useState(null);
+  const [syncLoading, setSyncLoading] = useState(false);
+  const [lastSync, setLastSync] = useState(null);
 
   useEffect(() => {
     const loadProcesses = async () => {
@@ -153,6 +160,13 @@ function App() {
       setEditorContent(resultadoFinal.htmlContent);
     }
   }, [resultadoFinal]);
+
+  // Cargar datos de sincronización cuando se accede a configuración
+  useEffect(() => {
+    if (screen === 'config') {
+      loadSyncData();
+    }
+  }, [screen]);
 
   const fetchProcessDetails = async (processId) => {
     // Ya no necesitamos esta función, la lógica se mueve al diligenciamiento.
@@ -317,7 +331,67 @@ function App() {
     setMappedData(prev => ({ ...prev, [e.target.name]: e.target.value }));
   };
 
+  // Función para cargar datos de sincronización
+  const loadSyncData = async () => {
+    setSyncLoading(true);
+    try {
+      const [apiResult, localResult] = await Promise.all([
+        window.electronAPI.app.getApiProcessIds(),
+        window.electronAPI.app.getLocalProcessIds()
+      ]);
 
+      if (apiResult.success) {
+        setApiIds(apiResult.data);
+      } else {
+        setSnackbar({ open: true, message: `Error API: ${apiResult.error}`, severity: 'error' });
+      }
+
+      if (localResult.success) {
+        setLocalIds(localResult.data);
+      } else {
+        setSnackbar({ open: true, message: `Error Local: ${localResult.error}`, severity: 'error' });
+      }
+
+    } catch (error) {
+      setSnackbar({ open: true, message: `Error cargando datos: ${error.message}`, severity: 'error' });
+    } finally {
+      setSyncLoading(false);
+    }
+  };
+
+  // Función para sincronizar procesos
+  const handleSyncProcesses = async () => {
+    setSyncLoading(true);
+    try {
+      const result = await window.electronAPI.app.syncProcesses();
+      setSyncStatus(result);
+      setLastSync(new Date().toLocaleString());
+      
+      if (result.success) {
+        setSnackbar({ 
+          open: true, 
+          message: `Sincronización completa. Eliminados ${result.removedCount} procesos obsoletos.`, 
+          severity: 'success' 
+        });
+        // Recargar datos después de sincronizar
+        await loadSyncData();
+        
+        // También recargar la lista principal de procesos si eliminamos algunos
+        if (result.removedCount > 0) {
+          const mainResult = await window.electronAPI.app.getProcesses();
+          if (mainResult.data) {
+            setProcesses(mainResult.data);
+          }
+        }
+      } else {
+        setSnackbar({ open: true, message: `Error en sincronización: ${result.error}`, severity: 'error' });
+      }
+    } catch (error) {
+      setSnackbar({ open: true, message: `Error en sincronización: ${error.message}`, severity: 'error' });
+    } finally {
+      setSyncLoading(false);
+    }
+  };
 
   const renderProcessList = () => {
     console.log('[React] Renderizando lista de procesos. Total de procesos en estado:', processes.length);
@@ -811,50 +885,163 @@ function App() {
     </Box>
   );
 
-  const renderConfigScreen = () => (
-    <Box>
-      <Typography variant="h4" gutterBottom>
-        Estado y Configuración del Sistema
-      </Typography>
-      <Typography variant="body1" color="text.secondary" gutterBottom>
-        Verifica el estado de la conexión con los servicios de la API.
-      </Typography>
+    const renderConfigScreen = () => {
+    // Encontrar diferencias
+    const onlyInApi = apiIds.filter(id => !localIds.includes(id));
+    const onlyInLocal = localIds.filter(id => !apiIds.includes(id));
+    const inBoth = apiIds.filter(id => localIds.includes(id));
 
-      <Paper sx={{ p: 3, mt: 3 }}>
-        <Typography variant="h6" gutterBottom>Pruebas de Conexión</Typography>
-        <Stack spacing={2} divider={<Divider />}>
-          <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-            <Typography>API de Lista de Procesos</Typography>
-            <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
-              {apiStatus.processes === 'success' && <Chip icon={<CheckCircleIcon />} label="Conexión Exitosa" color="success" />}
-              {apiStatus.processes === 'error' && <Chip icon={<ErrorIcon />} label="Fallo la Conexión" color="error" />}
-              <Button
-                variant="outlined"
-                onClick={() => handleTestApi('processes')}
-                disabled={testingApi === 'processes'}
-              >
-                {testingApi === 'processes' ? 'Probando...' : 'Probar'}
-              </Button>
+    return (
+      <Box>
+        <Typography variant="h4" gutterBottom>
+          Estado y Configuración del Sistema
+        </Typography>
+        <Typography variant="body1" color="text.secondary" gutterBottom>
+          Control de sincronización entre API y caché local de procesos.
+        </Typography>
+
+        {/* Estadísticas Generales */}
+        <Grid container spacing={3} sx={{ mt: 2 }}>
+          <Grid item xs={12} md={4}>
+            <Card>
+              <CardContent>
+                <Typography variant="h6" color="primary">API Remota</Typography>
+                <Typography variant="h4">{apiIds.length}</Typography>
+                <Typography variant="body2" color="text.secondary">Procesos disponibles</Typography>
+              </CardContent>
+            </Card>
+          </Grid>
+          <Grid item xs={12} md={4}>
+            <Card>
+              <CardContent>
+                <Typography variant="h6" color="secondary">Caché Local</Typography>
+                <Typography variant="h4">{localIds.length}</Typography>
+                <Typography variant="body2" color="text.secondary">Procesos almacenados</Typography>
+              </CardContent>
+            </Card>
+          </Grid>
+          <Grid item xs={12} md={4}>
+            <Card>
+              <CardContent>
+                <Typography variant="h6" color="success.main">Sincronizados</Typography>
+                <Typography variant="h4">{inBoth.length}</Typography>
+                <Typography variant="body2" color="text.secondary">Procesos coincidentes</Typography>
+              </CardContent>
+            </Card>
+          </Grid>
+        </Grid>
+
+        {/* Controles de Sincronización */}
+        <Paper sx={{ p: 3, mt: 3 }}>
+          <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2 }}>
+            <Typography variant="h6">Control de Sincronización</Typography>
+            <Box sx={{ display: 'flex', gap: 2 }}>
+                             <Button
+                 variant="outlined"
+                 onClick={loadSyncData}
+                 disabled={syncLoading}
+                 startIcon={<Refresh />}
+               >
+                 Actualizar
+               </Button>
+               <Button
+                 variant="contained"
+                 onClick={handleSyncProcesses}
+                 disabled={syncLoading}
+                 startIcon={<CheckCircleIcon />}
+               >
+                 {syncLoading ? 'Sincronizando...' : 'Sincronizar Ahora'}
+               </Button>
             </Box>
           </Box>
-          <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-            <Typography>API de Detalle de Documentos</Typography>
-            <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
-              {apiStatus.documents === 'success' && <Chip icon={<CheckCircleIcon />} label="Conexión Exitosa" color="success" />}
-              {apiStatus.documents === 'error' && <Chip icon={<ErrorIcon />} label="Fallo la Conexión" color="error" />}
-              <Button
-                variant="outlined"
-                onClick={() => handleTestApi('documents')}
-                disabled={testingApi === 'documents'}
-              >
-                {testingApi === 'documents' ? 'Probando...' : 'Probar'}
-              </Button>
+          
+          {lastSync && (
+            <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+              Última sincronización: {lastSync}
+            </Typography>
+          )}
+
+          {/* Alertas de Estado */}
+          {onlyInLocal.length > 0 && (
+            <Alert severity="warning" sx={{ mb: 2 }}>
+              <strong>{onlyInLocal.length} procesos obsoletos</strong> en caché local que ya no están en la API.
+              <br />
+              IDs: {onlyInLocal.slice(0, 10).join(', ')}{onlyInLocal.length > 10 ? '...' : ''}
+            </Alert>
+          )}
+          
+          {onlyInApi.length > 0 && (
+            <Alert severity="info" sx={{ mb: 2 }}>
+              <strong>{onlyInApi.length} procesos nuevos</strong> en la API que no están en caché local.
+              <br />
+              IDs: {onlyInApi.slice(0, 10).join(', ')}{onlyInApi.length > 10 ? '...' : ''}
+            </Alert>
+          )}
+
+          {onlyInLocal.length === 0 && onlyInApi.length === 0 && apiIds.length > 0 && (
+            <Alert severity="success">
+              ✅ Todos los procesos están sincronizados correctamente.
+            </Alert>
+          )}
+        </Paper>
+
+        {/* Listados Detallados */}
+        <Tabs value={0} sx={{ mt: 3 }}>
+          <Tab label={`IDs API (${apiIds.length})`} />
+          <Tab label={`IDs Local (${localIds.length})`} />
+          <Tab label={`Solo API (${onlyInApi.length})`} />
+          <Tab label={`Solo Local (${onlyInLocal.length})`} />
+        </Tabs>
+        
+        <Paper sx={{ p: 2, mt: 1, maxHeight: 300, overflow: 'auto' }}>
+          <Typography variant="body2" component="pre" sx={{ whiteSpace: 'pre-wrap', fontFamily: 'monospace' }}>
+            API IDs: {JSON.stringify(apiIds, null, 2)}
+            {'\n\n'}
+            Local IDs: {JSON.stringify(localIds, null, 2)}
+            {'\n\n'}
+            Solo en API: {JSON.stringify(onlyInApi, null, 2)}
+            {'\n\n'}
+            Solo en Local: {JSON.stringify(onlyInLocal, null, 2)}
+          </Typography>
+        </Paper>
+
+        {/* Pruebas de Conexión Originales */}
+        <Paper sx={{ p: 3, mt: 3 }}>
+          <Typography variant="h6" gutterBottom>Pruebas de Conexión</Typography>
+          <Stack spacing={2} divider={<Divider />}>
+            <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+              <Typography>API de Lista de Procesos</Typography>
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
+                {apiStatus.processes === 'success' && <Chip icon={<CheckCircleIcon />} label="Conexión Exitosa" color="success" />}
+                {apiStatus.processes === 'error' && <Chip icon={<ErrorIcon />} label="Fallo la Conexión" color="error" />}
+                <Button
+                  variant="outlined"
+                  onClick={() => handleTestApi('processes')}
+                  disabled={testingApi === 'processes'}
+                >
+                  {testingApi === 'processes' ? 'Probando...' : 'Probar'}
+                </Button>
+              </Box>
             </Box>
-          </Box>
-        </Stack>
-      </Paper>
-    </Box>
-  );
+            <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+              <Typography>API de Detalle de Documentos</Typography>
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
+                {apiStatus.documents === 'success' && <Chip icon={<CheckCircleIcon />} label="Conexión Exitosa" color="success" />}
+                {apiStatus.documents === 'error' && <Chip icon={<ErrorIcon />} label="Fallo la Conexión" color="error" />}
+                <Button
+                  variant="outlined"
+                  onClick={() => handleTestApi('documents')}
+                  disabled={testingApi === 'documents'}
+                >
+                  {testingApi === 'documents' ? 'Probando...' : 'Probar'}
+                </Button>
+              </Box>
+            </Box>
+          </Stack>
+        </Paper>
+      </Box>
+    );
+  };
 
   const handleSnackbarClose = (event, reason) => {
     if (reason === 'clickaway') {

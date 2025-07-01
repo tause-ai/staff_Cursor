@@ -199,6 +199,143 @@ ipcMain.handle('app:getProcesses', async () => {
   }
 });
 
+// Obtener solo los IDs de procesos directamente de la API (para configuración)
+ipcMain.handle('app:getApiProcessIds', async () => {
+  console.log('[Electron Backend] Obteniendo IDs de procesos directamente de la API...');
+  try {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => {
+      console.log('[Electron Backend] Timeout alcanzado para obtener IDs de API.');
+      controller.abort();
+    }, 10000);
+
+    const response = await fetch('http://192.168.145.6/api/v1/bots/bot_proceso_ids', {
+      signal: controller.signal
+    });
+    clearTimeout(timeout);
+
+    if (!response.ok) {
+      throw new Error(`Error de API: ${response.statusText}`);
+    }
+    
+    const processIds = await response.json();
+    console.log(`[Electron Backend] Obtenidos ${processIds.length} IDs de la API:`, processIds);
+    
+    return { 
+      success: true, 
+      data: processIds,
+      timestamp: new Date().toISOString()
+    };
+
+  } catch (error) {
+    console.error(`[Electron Backend] Error al obtener IDs de la API: ${error.message}`);
+    return { 
+      success: false, 
+      error: error.message,
+      data: [],
+      timestamp: new Date().toISOString()
+    };
+  }
+});
+
+// Obtener IDs de procesos del caché local
+ipcMain.handle('app:getLocalProcessIds', async () => {
+  console.log('[Electron Backend] Obteniendo IDs de procesos del caché local...');
+  try {
+    const localDataPath = path.join(app.getPath('userData'), '..', 'Electron', 'procesos_del_dia.json');
+    const localData = await fs.readFile(localDataPath, 'utf-8');
+    const processes = JSON.parse(localData);
+    
+    const localIds = processes.map(process => process.proceso_id).filter(id => id);
+    console.log(`[Electron Backend] Obtenidos ${localIds.length} IDs del caché local:`, localIds);
+    
+    return { 
+      success: true, 
+      data: localIds,
+      totalProcesses: processes.length,
+      timestamp: new Date().toISOString()
+    };
+
+  } catch (error) {
+    console.error(`[Electron Backend] Error al leer caché local: ${error.message}`);
+    return { 
+      success: false, 
+      error: error.message,
+      data: [],
+      totalProcesses: 0,
+      timestamp: new Date().toISOString()
+    };
+  }
+});
+
+// Sincronizar procesos: eliminar del caché local los que no están en la API
+ipcMain.handle('app:syncProcesses', async () => {
+  console.log('[Electron Backend] Iniciando sincronización de procesos...');
+  try {
+    const localDataPath = path.join(app.getPath('userData'), '..', 'Electron', 'procesos_del_dia.json');
+    
+    // Obtener IDs de la API
+    const apiIdsResult = await ipcMain.emit('app:getApiProcessIds');
+    if (!apiIdsResult || !apiIdsResult.success) {
+      throw new Error('No se pudieron obtener los IDs de la API');
+    }
+    
+    // Obtener procesos locales
+    const localData = await fs.readFile(localDataPath, 'utf-8');
+    const localProcesses = JSON.parse(localData);
+    
+    // Obtener IDs directamente de la API usando fetch
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 10000);
+    
+    const response = await fetch('http://192.168.145.6/api/v1/bots/bot_proceso_ids', {
+      signal: controller.signal
+    });
+    clearTimeout(timeout);
+    
+    if (!response.ok) {
+      throw new Error(`Error de API: ${response.statusText}`);
+    }
+    
+    const apiIds = await response.json();
+    const localIds = localProcesses.map(p => p.proceso_id);
+    
+    console.log(`[Sincronización] API tiene ${apiIds.length} procesos`);
+    console.log(`[Sincronización] Caché local tiene ${localIds.length} procesos`);
+    
+    // Encontrar procesos que están en local pero no en API (obsoletos)
+    const obsoleteIds = localIds.filter(localId => !apiIds.includes(localId));
+    const validProcesses = localProcesses.filter(process => apiIds.includes(process.proceso_id));
+    
+    console.log(`[Sincronización] Procesos obsoletos encontrados: ${obsoleteIds.length}`, obsoleteIds);
+    console.log(`[Sincronización] Procesos válidos: ${validProcesses.length}`);
+    
+    // Guardar solo los procesos válidos
+    if (obsoleteIds.length > 0) {
+      await fs.writeFile(localDataPath, JSON.stringify(validProcesses, null, 2));
+      console.log(`[Sincronización] Eliminados ${obsoleteIds.length} procesos obsoletos del caché.`);
+    }
+    
+    return {
+      success: true,
+      apiIds: apiIds,
+      localIds: localIds,
+      obsoleteIds: obsoleteIds,
+      validProcesses: validProcesses.length,
+      removedCount: obsoleteIds.length,
+      timestamp: new Date().toISOString()
+    };
+
+  } catch (error) {
+    console.error(`[Electron Backend] Error en sincronización: ${error.message}`);
+    return {
+      success: false,
+      error: error.message,
+      timestamp: new Date().toISOString()
+    };
+  }
+});
+
 // Obtener los campos de una plantilla Word
 ipcMain.handle('app:getTemplateFields', async (event, clientName) => {
   console.log(`[getTemplateFields] Buscando plantilla para cliente: "${clientName}"`);

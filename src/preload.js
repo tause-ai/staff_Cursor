@@ -43,6 +43,19 @@ const electronAPI = {
     
     // Dejar de escuchar el evento para evitar memory leaks
     offReload: (callback) => ipcRenderer.removeListener('reload-processes', callback),
+    
+    // --- Funciones de Sincronización ---
+    // Obtener IDs de procesos directamente de la API
+    getApiProcessIds: () =>
+      ipcRenderer.invoke('app:getApiProcessIds'),
+      
+    // Obtener IDs de procesos del caché local
+    getLocalProcessIds: () =>
+      ipcRenderer.invoke('app:getLocalProcessIds'),
+      
+    // Sincronizar procesos eliminando obsoletos
+    syncProcesses: () =>
+      ipcRenderer.invoke('app:syncProcesses'),
   },
 
   // --- Operaciones Genéricas ---
