@@ -53,3 +53,58 @@ formatos/
 
 # Electron app data (user data)
 # Note: procesos_del_dia.json is user-specific cache data
+
+# ======== AGREGADOS PARA CORREGIR EL PROBLEMA ========
+
+# Archivos ejecutables y de distribución
+*.exe
+*.dmg
+*.deb
+*.rpm
+*.zip
+*.tar.gz
+*.app
+
+# Archivos de caché y datos locales
+process_cache/
+*.cache
+.cache/
+
+# Archivos de configuración local de Electron
+electron-builder.json
+electron-builder.yml
+
+# Archivos de recursos compilados
+*.asar
+*.pak
+
+# Archivos de salida generados
+*.docx
+*.pdf
+*.html
+/Demandas_Staffbot/
+
+# Archivos de datos locales que no deben sincronizarse
+procesos_del_dia.json
+process_*.json
+*_mappedData.json
+
+# Archivos temporales del sistema
+*.tmp
+*.temp
+.tmp/
+.temp/
+
+# Archivos de backup
+*.bak
+*.backup
+*~
+
+# Archivos de análisis y profiling
+*.profile
+*.prof
+
+# Archivos de testing que no deben subirse
+test_*.json
+test_*.txt
+test_results/
