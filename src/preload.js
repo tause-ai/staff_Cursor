@@ -25,6 +25,10 @@ const electronAPI = {
     getProcessCoverMappedData: (proceso) =>
       ipcRenderer.invoke('app:getProcessCoverMappedData', proceso),
 
+    // Actualizar los datos mapeados de un proceso
+    updateMappedData: (processId, updatedMappedData) =>
+      ipcRenderer.invoke('app:updateMappedData', processId, updatedMappedData),
+
     // Enviar un proceso para ser diligenciado
     diligenciarDemanda: (proceso) =>
       ipcRenderer.invoke('app:diligenciarDemanda', proceso),

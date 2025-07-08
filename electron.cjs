@@ -537,6 +537,19 @@ async function getProcessMappedData(process) {
   console.log('[getProcessMappedData] Cliente:', process.cliente?.razon);
   
   try {
+    // Verificar si existe un caché con datos modificados
+    const userDataPath = app.getPath('userData');
+    const cacheFile = path.join(userDataPath, 'process_cache', `process_${process.proceso_id}_mappedData.json`);
+    
+    try {
+      const cachedData = await fs.readFile(cacheFile, 'utf-8');
+      const parsedCachedData = JSON.parse(cachedData);
+      console.log('[getProcessMappedData] Datos encontrados en caché, usando versión modificada');
+      return parsedCachedData;
+    } catch (cacheError) {
+      // Si no hay caché, continuar con el procesamiento normal
+      console.log('[getProcessMappedData] No se encontró caché, procesando datos originales');
+    }
     // 1. Obtener los campos requeridos por la plantilla de esta entidad
     const clientName = process.cliente?.razon || '';
     let templateFields = [];
@@ -1452,6 +1465,38 @@ ipcMain.handle('app:diligenciarDemanda', async (event, proceso) => {
     return {
       success: false,
       message: `Error al diligenciar demanda: ${error.message}`,
+      error: error.toString()
+    };
+  }
+});
+
+// Función para actualizar los datos mapeados de un proceso
+ipcMain.handle('app:updateMappedData', async (event, processId, updatedMappedData) => {
+  console.log('[updateMappedData] Actualizando datos para proceso:', processId);
+  console.log('[updateMappedData] Datos recibidos:', updatedMappedData);
+  
+  try {
+    // Guardar los datos actualizados en un archivo de caché para el proceso
+    const userDataPath = app.getPath('userData');
+    const cacheDir = path.join(userDataPath, 'process_cache');
+    await fs.mkdir(cacheDir, { recursive: true });
+    
+    const cacheFile = path.join(cacheDir, `process_${processId}_mappedData.json`);
+    await fs.writeFile(cacheFile, JSON.stringify(updatedMappedData, null, 2));
+    
+    console.log('[updateMappedData] Datos guardados en caché:', cacheFile);
+    
+    return {
+      success: true,
+      message: 'Datos actualizados exitosamente',
+      cacheFile: cacheFile
+    };
+    
+  } catch (error) {
+    console.error('[updateMappedData] Error al actualizar datos:', error);
+    return {
+      success: false,
+      message: `Error al actualizar datos: ${error.message}`,
       error: error.toString()
     };
   }

@@ -44,6 +44,7 @@ import Visibility from '@mui/icons-material/Visibility';
 import PictureAsPdf from '@mui/icons-material/PictureAsPdf';
 import ReactQuill from 'react-quill';
 import 'react-quill/dist/quill.snow.css';
+import FieldEditor from './components/FieldEditor';
 
 const screens = [
   { key: 'processList', label: 'Lista de procesos', icon: <ListIcon /> },
@@ -51,13 +52,6 @@ const screens = [
   { key: 'demandEditor', label: 'Editor de demanda', icon: <Edit /> },
   { key: 'localHistory', label: 'Historial local', icon: <History /> },
   { key: 'config', label: 'Configuración', icon: <SettingsIcon /> },
-];
-
-// Datos simulados para la demo
-const mockProcesses = [
-  { id: 1, name: 'Demanda Bancamia', status: 'Pendiente', date: '2024-01-15', entity: 'Bancamia' },
-  { id: 2, name: 'Demanda Contactar', status: 'En proceso', date: '2024-01-14', entity: 'Banco Contactar' },
-  { id: 3, name: 'Demanda CFA', status: 'Completada', date: '2024-01-13', entity: 'CFA' },
 ];
 
 function App() {
@@ -96,6 +90,10 @@ function App() {
   // Estados para el buscador de procesos
   const [searchTerm, setSearchTerm] = useState('');
   const [processStatus, setProcessStatus] = useState({}); // Para trackear el estado de cada proceso
+  
+  // Estados para el editor de campos
+  const [fieldEditorOpen, setFieldEditorOpen] = useState(false);
+  const [currentMappedData, setCurrentMappedData] = useState(null);
 
   useEffect(() => {
     const loadProcesses = async () => {
@@ -190,21 +188,94 @@ function App() {
     setScreen('processDetail');
   };
 
-  const handleDiligenciar = () => {
+  const handleDiligenciar = async () => {
     if (!selectedProcess) return;
     setDiligenciando(true);
     setResultadoFinal(null);
-    window.electronAPI.app.diligenciarDemanda(selectedProcess).then(resultado => {
+    
+    try {
+      const resultado = await window.electronAPI.app.diligenciarDemanda(selectedProcess);
       setDiligenciando(false);
       setResultadoFinal(resultado);
       
       // Si el diligenciado fue exitoso, navegar automáticamente al Editor de Demanda
       if (resultado.success) {
+        // Guardar los datos mapeados para el editor
+        setCurrentMappedData(resultado.data);
         // Marcar proceso como completado
         markProcessAsCompleted(selectedProcess.proceso_id);
         setScreen('demandEditor');
       }
-    });
+    } catch (error) {
+      setDiligenciando(false);
+      console.error('Error al diligenciar:', error);
+    }
+  };
+
+  // Función para manejar la edición de campos
+  const handleOpenFieldEditor = () => {
+    // Establecer los datos actuales antes de abrir el editor
+    setCurrentMappedData(mappedData);
+    setFieldEditorOpen(true);
+  };
+
+  // Función para guardar los campos editados
+  const handleSaveEditedFields = async (editedData) => {
+    console.log('[handleSaveEditedFields] Iniciando guardado de campos para proceso:', selectedProcess.proceso_id);
+    console.log('[handleSaveEditedFields] Datos a guardar:', editedData);
+    
+    try {
+      // Paso 1: Guardar en backend
+      console.log('[handleSaveEditedFields] Llamando updateMappedData...');
+      const result = await window.electronAPI.app.updateMappedData(
+        selectedProcess.proceso_id, 
+        editedData
+      );
+      
+      console.log('[handleSaveEditedFields] Respuesta del backend:', result);
+      
+      if (result.success) {
+        // Paso 2: Actualizar estados locales
+        console.log('[handleSaveEditedFields] Actualizando estados locales...');
+        setCurrentMappedData(editedData);
+        setMappedData(editedData);
+        
+        setSnackbar({ 
+          open: true, 
+          message: 'Campos guardados exitosamente ✅', 
+          severity: 'success' 
+        });
+        
+        // Paso 3: Regenerar documento (opcional, en segundo plano)
+        console.log('[handleSaveEditedFields] Iniciando regeneración del documento...');
+        try {
+          await handleRegenerateDocument();
+          console.log('[handleSaveEditedFields] Documento regenerado exitosamente');
+        } catch (regenError) {
+          console.error('[handleSaveEditedFields] Error en regeneración (no crítico):', regenError);
+          setSnackbar({ 
+            open: true, 
+            message: 'Campos guardados ✅ pero error al regenerar documento. Usa el botón "Regenerar" manualmente.', 
+            severity: 'warning' 
+          });
+        }
+        
+      } else {
+        console.error('[handleSaveEditedFields] Error del backend:', result);
+        setSnackbar({ 
+          open: true, 
+          message: 'Error al actualizar campos: ' + (result.message || 'Error desconocido'), 
+          severity: 'error' 
+        });
+      }
+    } catch (error) {
+      console.error('[handleSaveEditedFields] Error en comunicación con backend:', error);
+      setSnackbar({ 
+        open: true, 
+        message: 'Error de comunicación: ' + error.message, 
+        severity: 'error' 
+      });
+    }
   };
 
   const handleGenerarPortada = async () => {
@@ -229,6 +300,12 @@ function App() {
           message: `Portada generada exitosamente: ${resultado.fileName}`,
           severity: 'success'
         });
+        
+        // Marcar proceso como en progreso si aún no está completado
+        const currentStatus = getProcessStatus(selectedProcess.proceso_id);
+        if (currentStatus === 'pending') {
+          markProcessAsInProgress(selectedProcess.proceso_id);
+        }
         
         // Opcionalmente abrir el archivo generado
         if (resultado.filePath) {
@@ -298,6 +375,12 @@ function App() {
     setTemplateFields([]); // Limpiamos los campos anteriores
     setCoverTemplateFields([]); // Limpiamos los campos de portada anteriores
     
+    // Marcar proceso como en progreso si aún no tiene estado
+    const currentStatus = getProcessStatus(process.proceso_id);
+    if (currentStatus === 'pending') {
+      markProcessAsInProgress(process.proceso_id);
+    }
+    
     if (process.cliente?.razon) {
       console.log('[React] Cargando datos para cliente:', process.cliente.razon);
       
@@ -308,6 +391,7 @@ function App() {
       console.log('[React] Datos de DEMANDA obtenidos:', data);
       setTemplateFields(fields);
       setMappedData(data);
+      setCurrentMappedData(data);
       
       // Obtenemos también los campos y datos para portada
       const coverFields = await window.electronAPI.app.getCoverTemplateFields(process.cliente.razon);
@@ -424,6 +508,22 @@ function App() {
     const newStatus = {
       ...processStatus,
       [processId]: 'completed'
+    };
+    setProcessStatus(newStatus);
+    
+    // Guardar en localStorage para persistencia
+    try {
+      localStorage.setItem('staffbot-process-status', JSON.stringify(newStatus));
+    } catch (e) {
+      console.warn('Error al guardar estado de procesos en localStorage:', e);
+    }
+  };
+
+  // Función para marcar proceso como en progreso
+  const markProcessAsInProgress = (processId) => {
+    const newStatus = {
+      ...processStatus,
+      [processId]: 'in_progress'
     };
     setProcessStatus(newStatus);
     
@@ -744,22 +844,6 @@ function App() {
       );
     }
 
-    // Configuración del editor Quill
-    const quillModules = {
-      toolbar: [
-        [{ 'header': [1, 2, 3, false] }],
-        ['bold', 'italic', 'underline'],
-        [{ 'list': 'ordered'}, { 'list': 'bullet' }],
-        [{ 'align': [] }],
-        ['clean']
-      ],
-    };
-
-    const quillFormats = [
-      'header', 'bold', 'italic', 'underline',
-      'list', 'bullet', 'align'
-    ];
-
     // Función para regenerar el documento con cambios
     const handleRegenerateDocument = async () => {
       if (!selectedProcess) return;
@@ -768,6 +852,9 @@ function App() {
       try {
         const resultado = await window.electronAPI.app.diligenciarDemanda(selectedProcess);
         setResultadoFinal(resultado);
+        if (resultado.htmlContent) {
+          setEditorContent(resultado.htmlContent);
+        }
       } catch (error) {
         console.error('Error al regenerar documento:', error);
         setSnackbar({
@@ -777,6 +864,80 @@ function App() {
         });
       } finally {
         setDiligenciando(false);
+      }
+    };
+
+    // Función para hacer campos editables inline
+    const handleFieldClick = (event) => {
+      const field = event.target;
+      if (field.classList.contains('field-highlight') && isEditing) {
+        const currentValue = field.textContent;
+        const fieldName = field.getAttribute('data-field');
+        
+        // Crear input temporal
+        const input = document.createElement('input');
+        input.type = 'text';
+        input.value = currentValue;
+        input.style.background = '#ffeb3b';
+        input.style.border = '2px solid #ffc107';
+        input.style.padding = '2px 4px';
+        input.style.borderRadius = '3px';
+        input.style.fontSize = 'inherit';
+        input.style.fontFamily = 'inherit';
+        input.style.width = Math.max(currentValue.length * 8, 100) + 'px';
+        
+        // Reemplazar temporalmente
+        field.style.display = 'none';
+        field.parentNode.insertBefore(input, field);
+        input.focus();
+        input.select();
+        
+        // Manejar guardado
+        const saveField = async () => {
+          const newValue = input.value;
+          field.textContent = newValue;
+          field.style.display = 'inline';
+          input.remove();
+          
+          // Actualizar mappedData si existe
+          if (mappedData && fieldName) {
+            mappedData[fieldName] = newValue;
+            
+            // Guardar los cambios al backend
+            try {
+              await window.electronAPI.app.updateMappedData(selectedProcess.proceso_id, mappedData);
+              setSnackbar({
+                open: true,
+                message: `Campo ${fieldName} actualizado y guardado: "${newValue}"`,
+                severity: 'success'
+              });
+            } catch (error) {
+              console.error('Error al guardar cambios:', error);
+              setSnackbar({
+                open: true,
+                message: `Error al guardar cambios en ${fieldName}`,
+                severity: 'error'
+              });
+            }
+          } else {
+            setSnackbar({
+              open: true,
+              message: `Campo ${fieldName} actualizado: "${newValue}"`,
+              severity: 'success'
+            });
+          }
+        };
+        
+        // Eventos
+        input.addEventListener('blur', saveField);
+        input.addEventListener('keydown', (e) => {
+          if (e.key === 'Enter') {
+            saveField();
+          } else if (e.key === 'Escape') {
+            field.style.display = 'inline';
+            input.remove();
+          }
+        });
       }
     };
 
@@ -795,12 +956,13 @@ function App() {
           {/* Barra de herramientas */}
           <Stack direction="row" spacing={2} sx={{ mt: 2 }}>
             <Button
-              variant={isEditing ? "contained" : "outlined"}
+              variant="contained"
               color="primary"
-              onClick={() => setIsEditing(!isEditing)}
+              onClick={handleOpenFieldEditor}
               startIcon={<Edit />}
+              disabled={!currentMappedData}
             >
-              {isEditing ? 'Modo Lectura' : 'Modo Edición'}
+              Editar Campos
             </Button>
             <Button
               variant="outlined"
@@ -838,6 +1000,15 @@ function App() {
           </Stack>
         </Box>
 
+        {/* Indicador de modo edición */}
+        {isEditing && (
+          <Alert severity="info" sx={{ mb: 3 }}>
+            <Typography variant="body2">
+              <strong>Modo Edición Activo:</strong> Haz clic en los campos resaltados (amarillo) para editarlos directamente.
+            </Typography>
+          </Alert>
+        )}
+
         {/* Indicador de carga */}
         {diligenciando && (
           <Box sx={{ mb: 3, display: 'flex', alignItems: 'center', gap: 2 }}>
@@ -865,7 +1036,7 @@ function App() {
           </Box>
         )}
 
-        {/* Editor WYSIWYG Principal */}
+        {/* Editor WYSIWYG Principal - CONSERVANDO LA ESTRUCTURA ORIGINAL */}
         {resultadoFinal && resultadoFinal.success && (
           <Paper sx={{ p: 0, overflow: 'hidden' }}>
             <Box sx={{ p: 2, bgcolor: 'primary.main', color: 'white' }}>
@@ -875,39 +1046,30 @@ function App() {
               </Typography>
               <Typography variant="body2" sx={{ opacity: 0.9 }}>
                 Los campos resaltados en amarillo fueron extraídos automáticamente. 
-                {isEditing ? ' Puedes editarlos directamente en el texto.' : ' Activa el modo edición para modificarlos.'}
+                {isEditing ? ' Haz clic en ellos para editarlos.' : ' Activa el modo edición para modificarlos.'}
               </Typography>
             </Box>
             
             <Box sx={{ minHeight: 600 }}>
-              {isEditing ? (
-                <ReactQuill
-                  theme="snow"
-                  value={editorContent}
-                  onChange={setEditorContent}
-                  modules={quillModules}
-                  formats={quillFormats}
-                  style={{ height: '500px' }}
-                />
-              ) : (
-                <Box 
-                  sx={{ 
-                    p: 3, 
-                    minHeight: 500,
-                    '& .field-highlight': {
-                      backgroundColor: '#ffeb3b !important',
-                      padding: '2px 4px',
-                      borderRadius: '2px',
-                      cursor: 'pointer',
-                      '&:hover': {
-                        backgroundColor: '#ffc107 !important',
-                        boxShadow: '0 0 0 2px rgba(25, 118, 210, 0.2)'
-                      }
-                    }
-                  }}
-                  dangerouslySetInnerHTML={{ __html: editorContent }}
-                />
-              )}
+              <Box 
+                onClick={handleFieldClick}
+                sx={{ 
+                  p: 3, 
+                  minHeight: 500,
+                  '& .field-highlight': {
+                    backgroundColor: '#ffeb3b !important',
+                    padding: '2px 4px',
+                    borderRadius: '2px',
+                    cursor: isEditing ? 'pointer' : 'default',
+                    border: isEditing ? '1px dashed #ffc107' : 'none',
+                    '&:hover': isEditing ? {
+                      backgroundColor: '#ffc107 !important',
+                      boxShadow: '0 0 0 2px rgba(25, 118, 210, 0.2)'
+                    } : {}
+                  }
+                }}
+                dangerouslySetInnerHTML={{ __html: editorContent }}
+              />
             </Box>
           </Paper>
         )}
@@ -931,53 +1093,108 @@ function App() {
     );
   };
 
-  const renderLocalHistory = () => (
-    <Box>
-      <Typography variant="h4" gutterBottom>
-        Historial Local
-      </Typography>
-      <Typography variant="body1" color="text.secondary" gutterBottom>
-        Procesos trabajados hoy (offline/online)
-      </Typography>
-      
-      <Grid container spacing={3} sx={{ mt: 2 }}>
-        {mockProcesses.map((process) => (
-          <Grid xs={12} md={6} lg={4} key={process.id}>
-            <Card>
-              <CardContent>
-                <Typography variant="h6" gutterBottom>
-                  {process.name}
-                </Typography>
-                <Typography variant="body2" color="text.secondary">
-                  Última modificación: {process.date}
-                </Typography>
-                <Chip 
-                  label={process.status} 
-                  color={process.status === 'Completada' ? 'success' : 'default'}
-                  size="small"
-                  sx={{ mt: 1 }}
-                />
-              </CardContent>
-              <CardActions>
-                <Button size="small" variant="outlined">
-                  Continuar
-                </Button>
-              </CardActions>
-            </Card>
+  const renderLocalHistory = () => {
+    // Filtrar procesos que han sido trabajados (completados o en proceso)
+    const workedProcesses = processes.filter(process => {
+      const status = getProcessStatus(process.proceso_id);
+      return status === 'completed' || status === 'in_progress';
+    });
+
+    // Obtener la fecha actual para mostrar procesos de hoy
+    const today = new Date().toISOString().split('T')[0];
+    
+    return (
+      <Box>
+        <Typography variant="h4" gutterBottom>
+          Historial Local
+        </Typography>
+        <Typography variant="body1" color="text.secondary" gutterBottom>
+          Procesos trabajados hoy (offline/online)
+        </Typography>
+        
+        {/* Indicador de procesos trabajados */}
+        <Box sx={{ mb: 2 }}>
+          <Typography variant="body2" color="text.secondary">
+            Total de procesos trabajados: {workedProcesses.length}
+          </Typography>
+        </Box>
+        
+        {workedProcesses.length > 0 ? (
+          <Grid container spacing={3} sx={{ mt: 2 }}>
+            {workedProcesses.map((process) => {
+              const status = getProcessStatus(process.proceso_id);
+              const statusLabel = status === 'completed' ? 'Completada' : 'En proceso';
+              const statusColor = status === 'completed' ? 'success' : 'warning';
+              
+              return (
+                <Grid item xs={12} md={6} lg={4} key={process.proceso_id}>
+                  <Card sx={{ 
+                    border: status === 'completed' ? '2px solid #4caf50' : '2px solid #ff9800'
+                  }}>
+                    <CardContent>
+                      <Typography variant="h6" gutterBottom>
+                        {process.cliente?.razon || 'Cliente no especificado'}
+                      </Typography>
+                      <Typography variant="body2" color="text.secondary">
+                        Deudor: {process.deudor?.nombre || 'No especificado'}
+                      </Typography>
+                      <Typography variant="caption" color="text.secondary" sx={{ mt: 1, display: 'block' }}>
+                        ID Proceso: {process.proceso_id}
+                      </Typography>
+                      <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>
+                        Procesado: {today}
+                      </Typography>
+                      <Chip 
+                        label={statusLabel} 
+                        color={statusColor}
+                        size="small"
+                        sx={{ mt: 1 }}
+                        icon={status === 'completed' ? <CheckCircleIcon /> : <StarIcon />}
+                      />
+                    </CardContent>
+                    <CardActions>
+                      <Button 
+                        size="small" 
+                        variant="outlined"
+                        onClick={() => handleProcessSelect(process)}
+                      >
+                        Continuar
+                      </Button>
+                    </CardActions>
+                  </Card>
+                </Grid>
+              );
+            })}
           </Grid>
-        ))}
-      </Grid>
-      
-      <Box sx={{ mt: 3 }}>
-        <Button 
-          variant="outlined" 
-          onClick={() => setScreen('processList')}
-        >
-          Volver a la Lista
-        </Button>
+        ) : (
+          <Paper sx={{ p: 3, mt: 2, textAlign: 'center' }}>
+            <Typography variant="h6" color="text.secondary">
+              No hay procesos trabajados aún
+            </Typography>
+            <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
+              Los procesos aparecerán aquí cuando los procesamientos se completen.
+            </Typography>
+            <Button 
+              variant="contained" 
+              onClick={() => setScreen('processList')}
+              sx={{ mt: 2 }}
+            >
+              Ir a Lista de Procesos
+            </Button>
+          </Paper>
+        )}
+        
+        <Box sx={{ mt: 3 }}>
+          <Button 
+            variant="outlined" 
+            onClick={() => setScreen('processList')}
+          >
+            Volver a la Lista
+          </Button>
+        </Box>
       </Box>
-    </Box>
-  );
+    );
+  };
 
     const renderConfigScreen = () => {
     // Encontrar diferencias
@@ -1182,6 +1399,15 @@ function App() {
           {screen === 'config' && renderConfigScreen()}
         </Container>
       </Box>
+
+      {/* Editor de Campos */}
+      <FieldEditor
+        open={fieldEditorOpen}
+        onClose={() => setFieldEditorOpen(false)}
+        mappedData={currentMappedData}
+        onSave={handleSaveEditedFields}
+        processId={selectedProcess?.proceso_id}
+      />
 
       <Snackbar
         open={snackbar.open}
