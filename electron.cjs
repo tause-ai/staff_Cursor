@@ -10,6 +10,7 @@ const pdf = require('pdf-parse');
 const InspectModule = require('docxtemplater/js/inspect-module.js');
 const { NumerosALetras } = require('numero-a-letras');
 const mammoth = require('mammoth');
+const { getDatabase } = require(path.join(__dirname, 'database.cjs'));
 
 
 const iModule = InspectModule();
@@ -35,7 +36,7 @@ function createWindow() {
   const isDev = !app.isPackaged; // Una forma más fiable de detectar el modo desarrollo
   
   if (isDev) {
-    mainWindow.loadURL('http://localhost:5173'); // Puerto por defecto de Vite
+    mainWindow.loadURL('http://localhost:5173'); // Puerto correcto de Vite
     mainWindow.webContents.openDevTools();
   } else {
     // En producción, servimos los archivos desde el build de Vite
@@ -76,19 +77,33 @@ app.on('activate', () => {
 
 const numerosALetras = new NumerosALetras();
 
-// Obtener y cachear los procesos de la API
-ipcMain.handle('app:getProcesses', async () => {
-  const localDataPath = path.join(app.getPath('userData'), '..', 'Electron', 'procesos_del_dia.json');
+// Función auxiliar para obtener la base de datos SQLite (sin migración automática)
+async function getDBInstance() {
+  try {
+    const db = getDatabase();
+    const stats = db.getStats();
+    
+    console.log(`[Electron Backend] Base de datos SQLite - Procesos: ${stats.procesos}, Datos editados: ${stats.mapped_data}`);
+    
+    return db;
+  } catch (error) {
+    console.error('[Electron Backend] Error al obtener instancia de BD:', error);
+    return getDatabase(); // Devolver la base de datos aunque falle
+  }
+}
 
+// Obtener y cachear los procesos de la API (ahora usando SQLite)
+ipcMain.handle('app:getProcesses', async () => {
   if (isFetchingProcesses) {
     console.log('[Electron Backend] La obtención de procesos ya está en curso.');
-    // Si ya hay una petición en curso, podrías devolver los datos locales para no bloquear la UI.
+    // Si ya hay una petición en curso, devolver datos desde la base de datos
     try {
-      const localData = await fs.readFile(localDataPath, 'utf-8');
-      return { source: 'local-cache-while-fetching', data: JSON.parse(localData) };
+      const db = await getDBInstance();
+      const processes = db.getAllProcesses();
+      return { source: 'database-while-fetching', data: processes };
     } catch (error) {
-      // Si no hay caché, se devuelve un array vacío, la UI mostrará "cargando..."
-      return { source: 'local-cache-while-fetching', data: [] };
+      console.error('[Electron Backend] Error al obtener procesos desde BD:', error);
+      return { source: 'database-while-fetching', data: [] };
     }
   }
 
@@ -98,11 +113,11 @@ ipcMain.handle('app:getProcesses', async () => {
     // --- INTENTAR OBTENER DATOS DE LA API ---
     console.log('[Electron Backend] Intentando obtener procesos desde la API...');
     const controller = new AbortController();
-    // Timeout agresivo de 5 segundos para la conexión inicial
+    // Timeout aumentado a 15 segundos para la conexión inicial
     const timeout = setTimeout(() => {
       console.log('[Electron Backend] Timeout de API alcanzado.');
       controller.abort();
-    }, 5000);
+    }, 15000);
 
     const processIdsResponse = await fetch('http://192.168.145.6/api/v1/bots/bot_proceso_ids', {
       signal: controller.signal
@@ -118,7 +133,7 @@ ipcMain.handle('app:getProcesses', async () => {
 
     const processDetailsPromises = processIds.map(id => {
       const detailController = new AbortController();
-      const detailTimeout = setTimeout(() => detailController.abort(), 5000); // Timeout por cada detalle
+      const detailTimeout = setTimeout(() => detailController.abort(), 10000); // Timeout aumentado a 10 segundos por detalle
       
       return fetch(`http://192.168.145.6/api/v1/bots/bot_documentos/${id}`, { signal: detailController.signal })
         .then(res => {
@@ -147,54 +162,38 @@ ipcMain.handle('app:getProcesses', async () => {
 
     console.log(`[Electron Backend] Obtenidos ${enrichedProcesses.length} detalles completos de procesos.`);
 
-    // Guardar los datos frescos en el archivo local (caché)
+    // Guardar los datos frescos en la base de datos
     try {
-        const directory = path.dirname(localDataPath);
-        await fs.mkdir(directory, { recursive: true }); // Asegurarse de que el directorio exista
-        await fs.writeFile(localDataPath, JSON.stringify(enrichedProcesses, null, 2));
-        console.log(`[Electron Backend] Procesos guardados en caché local: ${localDataPath}`);
+        const db = await getDBInstance();
+        const result = db.upsertProcesses(enrichedProcesses);
+        
+        if (result.success) {
+          console.log(`[Electron Backend] ${result.count} procesos guardados en base de datos`);
+        } else {
+          console.error(`[Electron Backend] Error al guardar en base de datos: ${result.error}`);
+        }
     } catch (writeError) {
-        console.error(`[Electron Backend] Fallo al escribir el archivo de caché: ${writeError.message}`);
+        console.error(`[Electron Backend] Error al escribir en base de datos: ${writeError.message}`);
     }
     
     isFetchingProcesses = false;
     return { source: 'api', data: enrichedProcesses };
 
   } catch (error) {
-    // --- FALLBACK A DATOS LOCALES SI LA API FALLA ---
+    // --- FALLBACK A DATOS LOCALES DESDE LA BASE DE DATOS ---
     isFetchingProcesses = false;
-    console.warn(`[Electron Backend] Fallo al conectar con la API: ${error.message}. Intentando cargar desde caché local.`);
+    console.warn(`[Electron Backend] Fallo al conectar con la API: ${error.message}. Intentando cargar desde base de datos.`);
     
     try {
-      const localData = await fs.readFile(localDataPath, 'utf-8');
-      console.log('[Electron Backend] Éxito al cargar procesos desde la caché local.');
-      const parsedData = JSON.parse(localData);
-      return { source: 'local', data: parsedData };
-    } catch (cacheError) {
-      console.error(`[Electron Backend] Fallo al leer la caché local: ${cacheError.message}`);
+      const db = await getDBInstance();
+      const processes = db.getAllProcesses();
+      console.log(`[Electron Backend] Éxito al cargar ${processes.length} procesos desde la base de datos.`);
+      return { source: 'database', data: processes };
+    } catch (dbError) {
+      console.error(`[Electron Backend] Error al leer la base de datos: ${dbError.message}`);
       
-      // Si el caché no existe, intentamos crearlo a partir del demo.
-      if (cacheError.code === 'ENOENT') {
-        console.log('[Electron Backend] Caché no encontrado. Intentando crear desde json_demo...');
-        try {
-          const demoDataPath = path.join(__dirname, 'json_demo');
-          const demoData = await fs.readFile(demoDataPath, 'utf-8');
-          const parsedDemoData = JSON.parse(demoData);
-          
-          // Creamos el directorio y guardamos el archivo de caché
-          const directory = path.dirname(localDataPath);
-          await fs.mkdir(directory, { recursive: true });
-          await fs.writeFile(localDataPath, JSON.stringify(parsedDemoData, null, 2));
-          console.log('[Electron Backend] Caché creado exitosamente desde json_demo.');
-
-          return { source: 'local-from-demo', data: parsedDemoData };
-        } catch (demoError) {
-          console.error(`[Electron Backend] Fallo al crear caché desde json_demo: ${demoError.message}`);
-        }
-      }
-
       // Si todo lo demás falla, devolvemos un error.
-      return { source: 'error', data: [], error: 'No se pudo conectar a la API ni cargar datos locales.' };
+      return { source: 'error', data: [], error: 'No se pudo conectar a la API ni cargar datos desde la base de datos.' };
     }
   }
 });
@@ -207,7 +206,7 @@ ipcMain.handle('app:getApiProcessIds', async () => {
     const timeout = setTimeout(() => {
       console.log('[Electron Backend] Timeout alcanzado para obtener IDs de API.');
       controller.abort();
-    }, 10000);
+    }, 15000);
 
     const response = await fetch('http://192.168.145.6/api/v1/bots/bot_proceso_ids', {
       signal: controller.signal
@@ -238,16 +237,15 @@ ipcMain.handle('app:getApiProcessIds', async () => {
   }
 });
 
-// Obtener IDs de procesos del caché local
+// Obtener IDs de procesos del caché local (ahora usando SQLite)
 ipcMain.handle('app:getLocalProcessIds', async () => {
-  console.log('[Electron Backend] Obteniendo IDs de procesos del caché local...');
+  console.log('[Electron Backend] Obteniendo IDs de procesos desde la base de datos...');
   try {
-    const localDataPath = path.join(app.getPath('userData'), '..', 'Electron', 'procesos_del_dia.json');
-    const localData = await fs.readFile(localDataPath, 'utf-8');
-    const processes = JSON.parse(localData);
+    const db = await getDBInstance();
+    const processes = db.getAllProcesses();
     
     const localIds = processes.map(process => process.proceso_id).filter(id => id);
-    console.log(`[Electron Backend] Obtenidos ${localIds.length} IDs del caché local:`, localIds);
+    console.log(`[Electron Backend] Obtenidos ${localIds.length} IDs desde la base de datos:`, localIds);
     
     return { 
       success: true, 
@@ -257,7 +255,7 @@ ipcMain.handle('app:getLocalProcessIds', async () => {
     };
 
   } catch (error) {
-    console.error(`[Electron Backend] Error al leer caché local: ${error.message}`);
+    console.error(`[Electron Backend] Error al leer desde la base de datos: ${error.message}`);
     return { 
       success: false, 
       error: error.message,
@@ -268,19 +266,18 @@ ipcMain.handle('app:getLocalProcessIds', async () => {
   }
 });
 
-// Sincronizar procesos: eliminar del caché local los que no están en la API
+// Sincronizar procesos: eliminar de la base de datos los que no están en la API
 ipcMain.handle('app:syncProcesses', async () => {
   console.log('[Electron Backend] Iniciando sincronización de procesos...');
   try {
-    const localDataPath = path.join(app.getPath('userData'), '..', 'Electron', 'procesos_del_dia.json');
+    const db = await getDBInstance();
     
-    // Obtener procesos locales
-    const localData = await fs.readFile(localDataPath, 'utf-8');
-    const localProcesses = JSON.parse(localData);
+    // Obtener procesos locales desde la base de datos
+    const localProcesses = db.getAllProcesses();
     
     // Obtener IDs directamente de la API usando fetch
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 10000);
+    const timeout = setTimeout(() => controller.abort(), 15000);
     
     const response = await fetch('http://192.168.145.6/api/v1/bots/bot_proceso_ids', {
       signal: controller.signal
@@ -295,20 +292,23 @@ ipcMain.handle('app:syncProcesses', async () => {
     const localIds = localProcesses.map(p => p.proceso_id);
     
     console.log(`[Sincronización] API tiene ${apiIds.length} procesos`);
-    console.log(`[Sincronización] Caché local tiene ${localIds.length} procesos`);
+    console.log(`[Sincronización] Base de datos tiene ${localIds.length} procesos`);
     
     // Encontrar procesos que están en local pero no en API (obsoletos)
     const obsoleteIds = localIds.filter(localId => !apiIds.includes(localId));
-    const validProcesses = localProcesses.filter(process => apiIds.includes(process.proceso_id));
     
     console.log(`[Sincronización] Procesos obsoletos encontrados: ${obsoleteIds.length}`, obsoleteIds);
-    console.log(`[Sincronización] Procesos válidos: ${validProcesses.length}`);
     
-    // Guardar solo los procesos válidos
+    // Eliminar procesos obsoletos de la base de datos
+    let removedCount = 0;
     if (obsoleteIds.length > 0) {
-      await fs.writeFile(localDataPath, JSON.stringify(validProcesses, null, 2));
-      console.log(`[Sincronización] Eliminados ${obsoleteIds.length} procesos obsoletos del caché.`);
+      const result = db.deleteProcesses(obsoleteIds);
+      removedCount = result.deletedCount;
+      console.log(`[Sincronización] Eliminados ${removedCount} procesos obsoletos de la base de datos.`);
     }
+    
+    // Obtener procesos válidos después de la limpieza
+    const validProcesses = db.getAllProcesses();
     
     return {
       success: true,
@@ -316,7 +316,7 @@ ipcMain.handle('app:syncProcesses', async () => {
       localIds: localIds,
       obsoleteIds: obsoleteIds,
       validProcesses: validProcesses.length,
-      removedCount: obsoleteIds.length,
+      removedCount: removedCount,
       timestamp: new Date().toISOString()
     };
 
@@ -331,13 +331,30 @@ ipcMain.handle('app:syncProcesses', async () => {
 });
 
 // Obtener los campos de una plantilla Word
-ipcMain.handle('app:getTemplateFields', async (event, clientName) => {
+ipcMain.handle('app:getTemplateFields', async (event, clientName, process = null) => {
   console.log(`[getTemplateFields] Buscando plantilla para cliente: "${clientName}"`);
   try {
     if (!clientName) {
       console.warn('[getTemplateFields] Se recibió un nombre de cliente vacío.');
       return [];
     }
+    
+    const templatesDir = path.join(__dirname, 'formatos', 'demandas');
+    const files = await fs.readdir(templatesDir);
+    console.log(`[getTemplateFields] Archivos disponibles en demandas:`, files);
+
+    let templateFile = null;
+    
+    // Si tenemos información del proceso, usar la nueva lógica que considera pagarés
+    if (process) {
+      console.log(`[getTemplateFields] Usando lógica inteligente de selección con proceso:`, process.proceso_id);
+      const cantidadPagares = detectarCantidadPagares(process);
+      templateFile = buscarPlantillaConPagares(files, clientName, cantidadPagares);
+    }
+    
+    // Fallback a la lógica original si no se encontró con la nueva lógica
+    if (!templateFile) {
+      console.log(`[getTemplateFields] Usando lógica original de selección`);
     
     // Normalizar el nombre del cliente para la búsqueda
     const normalizedClientName = clientName.toLowerCase()
@@ -346,13 +363,6 @@ ipcMain.handle('app:getTemplateFields', async (event, clientName) => {
       .replace(/[^a-z0-9]/g, '');
     
     console.log(`[getTemplateFields] Nombre normalizado para búsqueda: "${normalizedClientName}"`);
-    
-    const templatesDir = path.join(__dirname, 'formatos', 'demandas');
-    const files = await fs.readdir(templatesDir);
-    console.log(`[getTemplateFields] Archivos disponibles en demandas:`, files);
-
-    // Buscar archivo que empiece con el nombre del cliente
-    let templateFile = null;
     
     // Estrategia 1: Buscar archivo que empiece con el nombre normalizado
     templateFile = files.find(file => {
@@ -374,6 +384,7 @@ ipcMain.handle('app:getTemplateFields', async (event, clientName) => {
           file.endsWith('.docx')
         );
       });
+      }
     }
 
     if (!templateFile) {
@@ -537,36 +548,43 @@ async function getProcessMappedData(process) {
   console.log('[getProcessMappedData] Cliente:', process.cliente?.razon);
   
   try {
-    // Verificar si existe un caché con datos modificados
-    const userDataPath = app.getPath('userData');
-    const cacheFile = path.join(userDataPath, 'process_cache', `process_${process.proceso_id}_mappedData.json`);
+    // Verificar si existe datos modificados en la base de datos
+    const db = await getDBInstance();
+    const cachedData = db.getMappedData(process.proceso_id);
     
-    try {
-      const cachedData = await fs.readFile(cacheFile, 'utf-8');
-      const parsedCachedData = JSON.parse(cachedData);
-      console.log('[getProcessMappedData] Datos encontrados en caché, usando versión modificada');
-      return parsedCachedData;
-    } catch (cacheError) {
-      // Si no hay caché, continuar con el procesamiento normal
-      console.log('[getProcessMappedData] No se encontró caché, procesando datos originales');
+    if (Object.keys(cachedData).length > 0) {
+      console.log('[getProcessMappedData] Datos encontrados en base de datos, usando versión modificada');
+      return cachedData;
+    } else {
+      console.log('[getProcessMappedData] No se encontraron datos modificados, procesando datos originales');
     }
     // 1. Obtener los campos requeridos por la plantilla de esta entidad
     const clientName = process.cliente?.razon || '';
     let templateFields = [];
     
-    // Obtener campos de la plantilla (copiamos la lógica de getTemplateFields)
+    // Obtener campos de la plantilla usando la nueva lógica inteligente
     try {
       if (clientName) {
+        const templatesDir = path.join(__dirname, 'formatos', 'demandas');
+        const files = await fs.readdir(templatesDir);
+        
+        // NUEVA LÓGICA: Detectar cantidad de pagarés y buscar plantilla apropiada
+        const cantidadPagares = detectarCantidadPagares(process);
+        console.log('[getProcessMappedData] Cantidad de pagarés detectada para mapeo:', cantidadPagares);
+        
+        let templateFile = buscarPlantillaConPagares(files, clientName, cantidadPagares);
+        
+        // Fallback a lógica original si no encontró con la nueva lógica
+        if (!templateFile) {
+          console.log('[getProcessMappedData] Usando lógica original para buscar plantilla');
+          
         const normalizedClientName = clientName.toLowerCase()
           .replace(/\./g, '')
           .replace(/\s+/g, '')
           .replace(/[^a-z0-9]/g, '');
         
-        const templatesDir = path.join(__dirname, 'formatos', 'demandas');
-        const files = await fs.readdir(templatesDir);
-        
         // Buscar archivo que empiece con el nombre del cliente
-        let templateFile = files.find(file => {
+          templateFile = files.find(file => {
           const normalizedFileName = file.toLowerCase()
             .replace(/\./g, '')
             .replace(/\s+/g, '')
@@ -585,6 +603,7 @@ async function getProcessMappedData(process) {
               file.endsWith('.docx')
             );
           });
+          }
         }
         
         if (templateFile) {
@@ -768,9 +787,6 @@ async function getProcessMappedData(process) {
       // Información del pagaré (priorizar datos extraídos del PDF) - Múltiples variaciones
       'NUMERO_PAGARE': datosPagare.numeroPagare || process.numero_pagare || '',
       'PAGARE': datosPagare.numeroPagare || process.numero_pagare || '',
-      'PAGARE_1': datosPagare.numeroPagare || process.numero_pagare || '', // Variación adicional
-      'PAGARE_2': datosPagare.numeroPagare || process.numero_pagare || '', // Mismo número para segundo pagaré
-      'PAGARE_3': datosPagare.numeroPagare || process.numero_pagare || '', // Mismo número para tercer pagaré
       'NUM_PAGARE': datosPagare.numeroPagare || process.numero_pagare || '', // Variación adicional
       'NO_PAGARE': datosPagare.numeroPagare || process.numero_pagare || '', // Variación adicional
       'FECHA_PAGARE': datosPagare.fechaSuscripcion || process.fecha_pagare || '',
@@ -782,8 +798,6 @@ async function getProcessMappedData(process) {
       'SUSCRIPCION_DEL_PAGARE': datosPagare.fechaSuscripcion || process.fecha_suscripcion || '',
       'VENCIMIENTO_PAGARE': datosPagare.fechaVencimiento || process.vencimiento_pagare || '',
       'VENCIMIENTO': datosPagare.fechaVencimiento || process.vencimiento || '',
-      'VENCIMIENTO_2': datosPagare.fechaVencimiento || process.vencimiento || '', // Misma fecha para segundo vencimiento
-      'VENCIMIENTO_3': datosPagare.fechaVencimiento || process.vencimiento || '', // Misma fecha para tercer vencimiento
       'FECHA_VENCIMIENTO': datosPagare.fechaVencimiento || process.fecha_vencimiento || '',
       'FECHA_MORA': datosPagare.fechaMora || calcularFechaMora(datosPagare.fechaVencimiento) || '',
       'MORA': datosPagare.fechaMora || calcularFechaMora(datosPagare.fechaVencimiento) || '',
@@ -795,12 +809,7 @@ async function getProcessMappedData(process) {
       
       // Campos de capital e intereses (usar el valor formateado del PDF)
       'CAPITAL': datosPagare.valorFormateado || formatearValorCompleto(process.valor) || '',
-      'CAPITAL_2': datosPagare.valorFormateado || formatearValorCompleto(process.valor) || '', // Mismo valor para segundo capital
       'CAPITAL_INSOLUTO': datosPagare.valorFormateado || formatearValorCompleto(process.valor) || '',
-      'CAPITAL_INSOLUTO_2': datosPagare.valorFormateado || formatearValorCompleto(process.valor) || '', // Mismo valor para segundo capital
-      'CAPITAL_INSOLUTO_3': datosPagare.valorFormateado || formatearValorCompleto(process.valor) || '', // Mismo valor para tercer capital
-      'INTERES_MORA_2': datosPagare.fechaMora || calcularFechaMora(datosPagare.fechaVencimiento) || '', // Misma fecha para segundo interés
-      'INTERES_MORA_3': datosPagare.fechaMora || calcularFechaMora(datosPagare.fechaVencimiento) || '', // Misma fecha para tercer interés
       
       // Información adicional
       'ABOGADO': process.abogado || '',
@@ -816,7 +825,33 @@ async function getProcessMappedData(process) {
       'DOCUMENTO': process.documento || ''
     };
 
-    // 4. Filtrar solo los campos que requiere la plantilla específica
+    // 4. NUEVA LÓGICA: Agregar campos dinámicos según cantidad de pagarés detectada
+    const cantidadPagares = detectarCantidadPagares(process);
+    console.log('[getProcessMappedData] Agregando campos dinámicos para', cantidadPagares, 'pagarés');
+    
+    // Agregar campos numerados dinámicamente
+    for (let i = 1; i <= cantidadPagares; i++) {
+      // Campos de pagaré numerados
+      allPossibleMappings[`PAGARE_${i}`] = datosPagare.numeroPagare || process.numero_pagare || process[`numero_pagare_${i}`] || '';
+      allPossibleMappings[`VENCIMIENTO_${i}`] = datosPagare.fechaVencimiento || process.vencimiento || process[`vencimiento_${i}`] || '';
+      allPossibleMappings[`CAPITAL_${i}`] = datosPagare.valorFormateado || formatearValorCompleto(process.valor || process[`valor_${i}`]) || '';
+      allPossibleMappings[`INTERES_MORA_${i}`] = datosPagare.fechaMora || calcularFechaMora(datosPagare.fechaVencimiento) || process[`interes_mora_${i}`] || '';
+      allPossibleMappings[`CAPITAL_INSOLUTO_${i}`] = datosPagare.valorFormateado || formatearValorCompleto(process.valor || process[`valor_${i}`]) || '';
+      
+      console.log(`[getProcessMappedData] Campos agregados para pagaré ${i}:`, {
+        [`PAGARE_${i}`]: allPossibleMappings[`PAGARE_${i}`],
+        [`VENCIMIENTO_${i}`]: allPossibleMappings[`VENCIMIENTO_${i}`],
+        [`CAPITAL_${i}`]: allPossibleMappings[`CAPITAL_${i}`]
+      });
+    }
+    
+    // Agregar campo TOTAL si hay múltiples pagarés
+    if (cantidadPagares > 1) {
+      allPossibleMappings['TOTAL'] = datosPagare.valorFormateado || formatearValorCompleto(process.valor_total || process.valor) || '';
+      console.log('[getProcessMappedData] Campo TOTAL agregado:', allPossibleMappings['TOTAL']);
+    }
+
+    // 5. Filtrar solo los campos que requiere la plantilla específica
     const mappedData = {};
     templateFields.forEach(field => {
       if (allPossibleMappings.hasOwnProperty(field)) {
@@ -855,6 +890,68 @@ async function getProcessMappedData(process) {
 // Handler IPC que usa la función auxiliar
 ipcMain.handle('app:getProcessMappedData', async (event, process) => {
   return await getProcessMappedData(process);
+});
+
+// NUEVO: Handler para debuggear documentos de un proceso
+ipcMain.handle('app:debugProcessDocuments', async (event, processId) => {
+  console.log('[debugProcessDocuments] Analizando documentos del proceso:', processId);
+  
+  try {
+    const db = await getDBInstance();
+    const processes = db.getAllProcesses();
+    const process = processes.find(p => p.proceso_id === processId);
+    
+    if (!process) {
+      return {
+        success: false,
+        error: 'Proceso no encontrado',
+        processId: processId
+      };
+    }
+    
+    const documentInfo = {
+      processId: processId,
+      cliente: process.cliente?.razon || 'NO ESPECIFICADO',
+      documentos: {},
+      cantidadPagares: detectarCantidadPagares(process),
+      estructura: {
+        tieneDocumentos: !!process.documentos,
+        cantidadDocumentos: process.documentos ? Object.keys(process.documentos).length : 0,
+        tiposDocumentos: process.documentos ? Object.keys(process.documentos) : []
+      }
+    };
+    
+    // Analizar cada documento si existen
+    if (process.documentos) {
+      for (const [docKey, docData] of Object.entries(process.documentos)) {
+        documentInfo.documentos[docKey] = {
+          existe: true,
+          filename: docData.filename || 'NO ESPECIFICADO',
+          content_type: docData.content_type || 'NO ESPECIFICADO',
+          hasBase64: !!docData.base64,
+          hasData: !!docData.data,
+          base64Length: docData.base64 ? docData.base64.length : 0,
+          dataLength: docData.data ? docData.data.length : 0,
+          esPagare: docKey.toLowerCase().includes('pagare')
+        };
+      }
+    }
+    
+    console.log('[debugProcessDocuments] Información de documentos:', documentInfo);
+    
+    return {
+      success: true,
+      data: documentInfo
+    };
+    
+  } catch (error) {
+    console.error('[debugProcessDocuments] Error:', error);
+    return {
+      success: false,
+      error: error.message,
+      processId: processId
+    };
+  }
 });
 
 // Función auxiliar para mapear datos de portada (similar a getProcessMappedData)
@@ -1107,9 +1204,19 @@ ipcMain.handle('app:diligenciarPortada', async (event, proceso) => {
   console.log('[diligenciarPortada] Cliente:', proceso.cliente?.razon);
   
   try {
-    // 1. Obtener los datos mapeados del proceso para portada
-    console.log('[diligenciarPortada] Obteniendo datos mapeados de portada...');
-    const mappedData = await getProcessCoverMappedData(proceso);
+    // 1. Verificar si hay datos editados en la base de datos PRIMERO
+    console.log('[diligenciarPortada] Verificando datos editados en base de datos...');
+    const db = await getDBInstance();
+    const cachedData = db.getMappedData(proceso.proceso_id);
+    
+    let mappedData;
+    if (Object.keys(cachedData).length > 0) {
+      console.log('[diligenciarPortada] Usando datos editados de la base de datos');
+      mappedData = cachedData;
+    } else {
+      console.log('[diligenciarPortada] Obteniendo datos mapeados frescos de portada...');
+      mappedData = await getProcessCoverMappedData(proceso);
+    }
     
     console.log('[diligenciarPortada] Datos mapeados de portada obtenidos:', mappedData);
     
@@ -1256,13 +1363,23 @@ ipcMain.handle('app:diligenciarDemanda', async (event, proceso) => {
     
     console.log('[diligenciarDemanda] Datos mapeados obtenidos:', mappedData);
     
-    // 2. Buscar el formato de demanda correspondiente
+    // 2. Buscar el formato de demanda correspondiente usando lógica inteligente
     const clientName = proceso.cliente?.razon || '';
     console.log('[diligenciarDemanda] Buscando formato para cliente:', clientName);
     
     const templatesDir = path.join(__dirname, 'formatos', 'demandas');
     const files = await fs.readdir(templatesDir);
     console.log('[diligenciarDemanda] Archivos disponibles:', files);
+    
+    // NUEVA LÓGICA: Detectar cantidad de pagarés y buscar plantilla apropiada
+    const cantidadPagares = detectarCantidadPagares(proceso);
+    console.log('[diligenciarDemanda] Cantidad de pagarés detectada:', cantidadPagares);
+    
+    let templateFile = buscarPlantillaConPagares(files, clientName, cantidadPagares);
+    
+    // Fallback a la lógica original si no se encontró con la nueva lógica
+    if (!templateFile) {
+      console.log('[diligenciarDemanda] Plantilla inteligente no encontrada, usando lógica original');
     
     // Normalizar el nombre del cliente para búsqueda más flexible
     const normalizedClientName = clientName.toLowerCase()
@@ -1271,9 +1388,6 @@ ipcMain.handle('app:diligenciarDemanda', async (event, proceso) => {
       .replace(/[^a-z0-9]/g, '');
     
     console.log('[diligenciarDemanda] Nombre normalizado:', normalizedClientName);
-    
-    // Buscar el archivo de formato correspondiente con múltiples estrategias
-    let templateFile = null;
     
     // Estrategia 1: Buscar archivo que empiece con el nombre normalizado
     templateFile = files.find(file => {
@@ -1301,6 +1415,7 @@ ipcMain.handle('app:diligenciarDemanda', async (event, proceso) => {
     if (!templateFile) {
       templateFile = files.find(file => file.endsWith('.docx') && !file.startsWith('~$'));
       console.warn('[diligenciarDemanda] No se encontró formato específico, usando fallback:', templateFile);
+      }
     }
     
     if (!templateFile) {
@@ -1470,27 +1585,31 @@ ipcMain.handle('app:diligenciarDemanda', async (event, proceso) => {
   }
 });
 
-// Función para actualizar los datos mapeados de un proceso
+// Función para actualizar los datos mapeados de un proceso (usando SQLite)
 ipcMain.handle('app:updateMappedData', async (event, processId, updatedMappedData) => {
   console.log('[updateMappedData] Actualizando datos para proceso:', processId);
   console.log('[updateMappedData] Datos recibidos:', updatedMappedData);
   
   try {
-    // Guardar los datos actualizados en un archivo de caché para el proceso
-    const userDataPath = app.getPath('userData');
-    const cacheDir = path.join(userDataPath, 'process_cache');
-    await fs.mkdir(cacheDir, { recursive: true });
+    const db = await getDBInstance();
+    const result = db.updateMappedData(processId, updatedMappedData);
     
-    const cacheFile = path.join(cacheDir, `process_${processId}_mappedData.json`);
-    await fs.writeFile(cacheFile, JSON.stringify(updatedMappedData, null, 2));
-    
-    console.log('[updateMappedData] Datos guardados en caché:', cacheFile);
-    
-    return {
-      success: true,
-      message: 'Datos actualizados exitosamente',
-      cacheFile: cacheFile
-    };
+    if (result.success) {
+      console.log(`[updateMappedData] Datos guardados en base de datos para proceso ${processId}`);
+      return {
+        success: true,
+        message: 'Datos actualizados exitosamente en base de datos',
+        processId: processId,
+        fieldsUpdated: Object.keys(updatedMappedData).length
+      };
+    } else {
+      console.error('[updateMappedData] Error al guardar en base de datos:', result.error);
+      return {
+        success: false,
+        message: `Error al actualizar datos: ${result.error}`,
+        error: result.error
+      };
+    }
     
   } catch (error) {
     console.error('[updateMappedData] Error al actualizar datos:', error);
@@ -1791,53 +1910,176 @@ async function extraerDatosPagare(pdfBase64) {
       }
     }
     
-    // Extraer valor/monto (buscar el primer valor decimal grande)
+    // Extraer valor/monto con búsqueda inteligente por contexto - MEJORADO
     try {
-      const valoresDecimales = [...texto.matchAll(/([0-9,]+\.[0-9]{2})/g)];
-      if (valoresDecimales.length > 0) {
-        // Tomar el primer valor que sea mayor a 1000 (probablemente el monto del pagaré)
-        for (const match of valoresDecimales) {
-          try {
+      console.log('[extraerDatosPagare] Iniciando búsqueda inteligente de valores...');
+      
+      // ESTRATEGIA 1: Buscar valores cerca de palabras clave específicas
+      const patronesCapital = [
+        // Patrones para "Capital" o "Monto del pagaré"
+        /(?:capital|monto\s*(?:del\s*)?pagaré|valor\s*(?:del\s*)?pagaré)[\s\S]{0,100}?([0-9,]+\.[0-9]{2})/gi,
+        /(?:capital|monto)[\s:]*\$?\s*([0-9,]+\.[0-9]{2})/gi,
+        // Patrones para secciones específicas del pagaré
+        /(?:primer[oa]?|primero)[\s\S]{0,200}?([0-9,]+\.[0-9]{2})/gi,
+        /(?:obligación\s*de\s*pago|valor\s*principal)[\s\S]{0,100}?([0-9,]+\.[0-9]{2})/gi,
+        // Patrón para valores en tablas o secciones estructuradas
+        /(?:valor\s*en\s*números|valor\s*numérico)[\s\S]{0,100}?([0-9,]+\.[0-9]{2})/gi
+      ];
+      
+      let valorEncontradoPorContexto = null;
+      
+      for (const patron of patronesCapital) {
+        const matches = [...texto.matchAll(patron)];
+        for (const match of matches) {
+          if (match[1]) {
             const valorLimpio = match[1].replace(/,/g, '');
             const valorNumerico = parseFloat(valorLimpio);
             if (!isNaN(valorNumerico) && valorNumerico > 1000) {
-              datosExtraidos.valor = valorNumerico;
-              datosExtraidos.valorFormateado = formatearValorCompleto(valorNumerico);
-              console.log('[extraerDatosPagare] Valor encontrado:', datosExtraidos.valor, '- Formateado:', datosExtraidos.valorFormateado);
+              valorEncontradoPorContexto = valorNumerico;
+              console.log(`[extraerDatosPagare] Valor encontrado por contexto: ${valorNumerico} (patrón específico)`);
               break;
             }
-          } catch (error) {
-            console.error('[extraerDatosPagare] Error procesando valor individual:', error);
           }
         }
+        if (valorEncontradoPorContexto) break;
       }
+      
+      // ESTRATEGIA 2: Si no encontró por contexto, buscar en ubicaciones específicas del texto
+      if (!valorEncontradoPorContexto) {
+        console.log('[extraerDatosPagare] No encontrado por contexto, buscando por ubicación...');
+        
+        // Buscar todos los valores decimales
+        const todosLosValores = [...texto.matchAll(/([0-9,]+\.[0-9]{2})/g)];
+        console.log('[extraerDatosPagare] Todos los valores decimales encontrados:', todosLosValores.map(v => v[1]));
+        
+        // Filtrar valores que NO están en contextos excluidos
+        const valoresFiltrados = [];
+        
+        for (const match of todosLosValores) {
+          const valor = match[1];
+          const indiceEnTexto = match.index;
+          
+          // Obtener contexto alrededor del valor (100 caracteres antes y después)
+          const contextoAntes = texto.substring(Math.max(0, indiceEnTexto - 100), indiceEnTexto);
+          const contextoDespues = texto.substring(indiceEnTexto, indiceEnTexto + 100);
+          const contextoCompleto = (contextoAntes + contextoDespues).toLowerCase();
+          
+          // Excluir valores que aparezcan en contextos de intereses, comisiones, etc.
+          const esExcluido = contextoCompleto.includes('interés') ||
+                           contextoCompleto.includes('intereses') ||
+                           contextoCompleto.includes('comisión') ||
+                           contextoCompleto.includes('comisiones') ||
+                           contextoCompleto.includes('mora') ||
+                           contextoCompleto.includes('multa') ||
+                           contextoCompleto.includes('gastos') ||
+                           contextoCompleto.includes('administración') ||
+                           contextoCompleto.includes('expedición') ||
+                           contextoCompleto.includes('certificación');
+          
+          if (!esExcluido) {
+            const valorNumerico = parseFloat(valor.replace(/,/g, ''));
+            if (!isNaN(valorNumerico) && valorNumerico > 1000) {
+              valoresFiltrados.push({
+                valor: valorNumerico,
+                indice: indiceEnTexto,
+                contexto: contextoCompleto.substring(0, 50)
+              });
+            }
+          }
+        }
+        
+        console.log('[extraerDatosPagare] Valores filtrados (sin contextos excluidos):', valoresFiltrados.length);
+        
+        // ESTRATEGIA 3: Priorizar valores que aparezcan en la primera mitad del documento
+        // (donde típicamente está el capital principal)
+        if (valoresFiltrados.length > 0) {
+          const longitudTexto = texto.length;
+          const valoresOrdenados = valoresFiltrados.sort((a, b) => {
+            // Priorizar valores en la primera mitad del documento
+            const pesoUbicacionA = a.indice < (longitudTexto / 2) ? 1 : 0.5;
+            const pesoUbicacionB = b.indice < (longitudTexto / 2) ? 1 : 0.5;
+            
+            // Priorizar valores más grandes (más probable que sea el capital principal)
+            const pesoValorA = a.valor > 10000 ? 1 : 0.8;
+            const pesoValorB = b.valor > 10000 ? 1 : 0.8;
+            
+            const puntajeA = pesoUbicacionA * pesoValorA;
+            const puntajeB = pesoUbicacionB * pesoValorB;
+            
+            return puntajeB - puntajeA; // Orden descendente
+          });
+          
+          valorEncontradoPorContexto = valoresOrdenados[0].valor;
+          console.log(`[extraerDatosPagare] Valor seleccionado por heurística: ${valorEncontradoPorContexto} (índice: ${valoresOrdenados[0].indice})`);
+        }
+      }
+      
+      // ESTRATEGIA 4: Fallback final - buscar el mayor valor razonable
+      if (!valorEncontradoPorContexto) {
+        console.log('[extraerDatosPagare] Usando fallback final...');
+        const todosLosValores = [...texto.matchAll(/([0-9,]+\.[0-9]{2})/g)];
+        const valoresNumericos = todosLosValores
+          .map(match => parseFloat(match[1].replace(/,/g, '')))
+          .filter(val => !isNaN(val) && val > 1000 && val < 100000000) // Rango razonable
+          .sort((a, b) => b - a); // Mayor a menor
+        
+        if (valoresNumericos.length > 0) {
+          valorEncontradoPorContexto = valoresNumericos[0];
+          console.log(`[extraerDatosPagare] Valor por fallback (mayor razonable): ${valorEncontradoPorContexto}`);
+        }
+      }
+      
+      // Asignar el valor encontrado
+      if (valorEncontradoPorContexto) {
+        datosExtraidos.valor = valorEncontradoPorContexto;
+        datosExtraidos.valorFormateado = formatearValorCompleto(valorEncontradoPorContexto);
+        console.log('[extraerDatosPagare] VALOR FINAL:', datosExtraidos.valor, '- Formateado:', datosExtraidos.valorFormateado);
+      } else {
+        console.warn('[extraerDatosPagare] No se pudo extraer valor del pagaré');
+      }
+      
     } catch (error) {
       console.error('[extraerDatosPagare] Error en extracción de valores:', error);
     }
     
-    // Extraer fechas específicas del pagaré
-    // Buscar fecha de suscripción cerca de "Fecha de suscripción"
-    let fechaSuscripcionMatch = texto.match(/(?:Fecha de suscripción|suscripción)\s*([0-9]{2}\/[0-9]{2}\/[0-9]{4})/i);
+    // Extraer fechas específicas del pagaré - MEJORADO
+    // Buscar fecha de suscripción con múltiples patrones más específicos
+    let fechaSuscripcionMatch = null;
+    
+    // Patrón 1: Cerca de "Fecha de suscripción" con flexibilidad en espacios y texto
+    const patronesSuscripcion = [
+      /(?:Fecha\s*de\s*suscripción|suscripción)[\s:]*([0-9]{2}\/[0-9]{2}\/[0-9]{4})/i,
+      /suscripción[\s\S]{0,50}([0-9]{2}\/[0-9]{2}\/[0-9]{4})/i,
+      /(?:firmad[oa]|suscrit[oa])[\s\S]{0,30}([0-9]{2}\/[0-9]{2}\/[0-9]{4})/i,
+      /(?:otorgad[oa]|celebrad[oa])[\s\S]{0,30}([0-9]{2}\/[0-9]{2}\/[0-9]{4})/i
+    ];
+    
+    for (const patron of patronesSuscripcion) {
+      fechaSuscripcionMatch = texto.match(patron);
+      if (fechaSuscripcionMatch) {
+        console.log('[extraerDatosPagare] Fecha suscripción encontrada con patrón específico:', fechaSuscripcionMatch[1]);
+        break;
+      }
+    }
+    
+    // Fallback: buscar fechas con formato DD-MM-YYYY (menos común pero posible)
     if (!fechaSuscripcionMatch) {
       fechaSuscripcionMatch = texto.match(/([0-9]{2}-[0-9]{2}-[0-9]{4})/);
-    }
-    if (!fechaSuscripcionMatch) {
-      fechaSuscripcionMatch = texto.match(/(18\/08\/2021)/);
-    }
-    if (!fechaSuscripcionMatch) {
-      fechaSuscripcionMatch = texto.match(/(2021-08-18)/);
+      if (fechaSuscripcionMatch) {
+        console.log('[extraerDatosPagare] Fecha suscripción encontrada en formato DD-MM-YYYY:', fechaSuscripcionMatch[1]);
+      }
     }
     
     if (fechaSuscripcionMatch) {
-      let fecha = fechaSuscripcionMatch[1] || '18/08/2021';
+      let fecha = fechaSuscripcionMatch[1];
       try {
-        // Convertir formato si es necesario
+        // Convertir formato DD-MM-YYYY a DD/MM/YYYY si es necesario
         if (fecha.includes('-')) {
           const partes = fecha.split('-');
-          fecha = `${partes[2]}/${partes[1]}/${partes[0]}`;
+          fecha = `${partes[0]}/${partes[1]}/${partes[2]}`;
         }
         datosExtraidos.fechaSuscripcion = fecha;
-        console.log('[extraerDatosPagare] Fecha suscripción encontrada:', datosExtraidos.fechaSuscripcion);
+        console.log('[extraerDatosPagare] Fecha suscripción procesada:', datosExtraidos.fechaSuscripcion);
       } catch (error) {
         console.error('[extraerDatosPagare] Error procesando fecha de suscripción:', error);
       }
@@ -1869,28 +2111,78 @@ async function extraerDatosPagare(pdfBase64) {
       }
     }
     
-    // Si no encontramos las fechas específicas, buscar en toda la estructura
+    // Si no encontramos las fechas específicas, buscar con lógica inteligente mejorada
     if (!datosExtraidos.fechaSuscripcion || !datosExtraidos.fechaVencimiento) {
       const todasLasFechas = [...texto.matchAll(/([0-9]{2}\/[0-9]{2}\/[0-9]{4})/g)];
       console.log('[extraerDatosPagare] Todas las fechas encontradas:', todasLasFechas.map(f => f[1]));
       
-      // Filtrar fechas relevantes (2021-2026, no 2023 que es expedición)
+      // Filtrar fechas relevantes con rango más amplio y excluir fechas de expedición/certificación
       const fechasRelevantes = todasLasFechas.filter(f => {
-        const año = f[1].split('/')[2];
-        return año >= '2021' && año <= '2026' && año !== '2023';
+        const año = parseInt(f[1].split('/')[2]);
+        const fecha = f[1];
+        
+        // Excluir fechas que probablemente son de expedición/certificación (2023-2024)
+        // y fechas muy futuras o pasadas
+        return año >= 2020 && año <= 2030 && año !== 2023 && año !== 2024;
       });
       
-      if (fechasRelevantes.length > 0 && !datosExtraidos.fechaSuscripcion) {
-        // La primera fecha relevante suele ser suscripción
-        datosExtraidos.fechaSuscripcion = fechasRelevantes[0][1];
-        console.log('[extraerDatosPagare] Fecha suscripción encontrada (general):', datosExtraidos.fechaSuscripcion);
+      console.log('[extraerDatosPagare] Fechas relevantes filtradas:', fechasRelevantes.map(f => f[1]));
+      
+      // NUEVA LÓGICA: Buscar fecha de suscripción por contexto en el texto
+      if (!datosExtraidos.fechaSuscripcion && fechasRelevantes.length > 0) {
+        // Buscar fechas que aparezcan después de palabras clave relacionadas con suscripción
+        const contextoBuscado = ['suscripción', 'firmado', 'otorgado', 'celebrado', 'firmada'];
+        let fechaSuscripcionEncontrada = null;
+        
+        for (const contextWord of contextoBuscado) {
+          const indicePalabra = texto.toLowerCase().indexOf(contextWord);
+          if (indicePalabra !== -1) {
+            // Buscar la fecha más cercana después de esta palabra
+            const textoDesPuesContexto = texto.substring(indicePalabra);
+            const fechaMatch = textoDesPuesContexto.match(/([0-9]{2}\/[0-9]{2}\/[0-9]{4})/);
+            if (fechaMatch) {
+              const fechaEncontrada = fechaMatch[1];
+              const añoEncontrado = parseInt(fechaEncontrada.split('/')[2]);
+              // Verificar que sea una fecha razonable para suscripción
+              if (añoEncontrado >= 2020 && añoEncontrado <= 2030 && añoEncontrado !== 2023 && añoEncontrado !== 2024) {
+                fechaSuscripcionEncontrada = fechaEncontrada;
+                console.log(`[extraerDatosPagare] Fecha suscripción encontrada por contexto "${contextWord}":`, fechaSuscripcionEncontrada);
+                break;
+              }
+            }
+          }
+        }
+        
+        if (fechaSuscripcionEncontrada) {
+          datosExtraidos.fechaSuscripcion = fechaSuscripcionEncontrada;
+        } else if (fechasRelevantes.length > 0) {
+          // Solo como último recurso, tomar la fecha más antigua de las relevantes
+          const fechasOrdenadas = fechasRelevantes.map(f => {
+            const partes = f[1].split('/');
+            return {
+              fecha: f[1],
+              timestamp: new Date(parseInt(partes[2]), parseInt(partes[1]) - 1, parseInt(partes[0])).getTime()
+            };
+          }).sort((a, b) => a.timestamp - b.timestamp);
+          
+          datosExtraidos.fechaSuscripcion = fechasOrdenadas[0].fecha;
+          console.log('[extraerDatosPagare] Fecha suscripción por fallback (más antigua):', datosExtraidos.fechaSuscripcion);
+        }
       }
       
-      if (fechasRelevantes.length > 1 && !datosExtraidos.fechaVencimiento) {
-        // La segunda fecha relevante suele ser vencimiento
-        datosExtraidos.fechaVencimiento = fechasRelevantes[1][1];
+      // Buscar fecha de vencimiento (la fecha más futura entre las relevantes)
+      if (!datosExtraidos.fechaVencimiento && fechasRelevantes.length > 0) {
+        const fechasOrdenadas = fechasRelevantes.map(f => {
+          const partes = f[1].split('/');
+          return {
+            fecha: f[1],
+            timestamp: new Date(parseInt(partes[2]), parseInt(partes[1]) - 1, parseInt(partes[0])).getTime()
+          };
+        }).sort((a, b) => b.timestamp - a.timestamp);
+        
+        datosExtraidos.fechaVencimiento = fechasOrdenadas[0].fecha;
         datosExtraidos.fechaMora = calcularFechaMora(datosExtraidos.fechaVencimiento);
-        console.log('[extraerDatosPagare] Fecha vencimiento encontrada (general):', datosExtraidos.fechaVencimiento);
+        console.log('[extraerDatosPagare] Fecha vencimiento encontrada (más futura):', datosExtraidos.fechaVencimiento);
         console.log('[extraerDatosPagare] Fecha mora calculada:', datosExtraidos.fechaMora);
       }
     }
@@ -1982,4 +2274,335 @@ async function extraerDatosPagare(pdfBase64) {
     console.error('[extraerDatosPagare] Error al extraer datos del pagaré:', error);
     return {};
   }
+}
+
+// === FUNCIONES AUXILIARES PARA DETECCIÓN DE PAGARÉS ===
+
+// Función MEJORADA para detectar cuántos pagarés hay en un proceso
+function detectarCantidadPagares(process) {
+  console.log('[detectarCantidadPagares] Analizando proceso:', process.proceso_id);
+  console.log('[detectarCantidadPagares] Estructura completa del proceso:', {
+    documentos: process.documentos ? Object.keys(process.documentos) : 'NO HAY',
+    campos_pagare: {
+      numero_pagare: process.numero_pagare,
+      numero_pagare_2: process.numero_pagare_2,
+      numero_pagare_3: process.numero_pagare_3,
+      pagares_array: process.pagares
+    },
+    valores: {
+      valor: process.valor,
+      valor_2: process.valor_2,
+      valor_3: process.valor_3
+    }
+  });
+  
+  let cantidadPagares = 1; // Por defecto asumimos 1 pagaré
+  
+  try {
+    // Estrategia 1: Revisar si hay múltiples documentos de pagaré (MEJORADA)
+    if (process.documentos) {
+      console.log('[detectarCantidadPagares] Revisando documentos:', Object.keys(process.documentos));
+      
+      // Buscar pagarés numerados con diferentes patrones
+      const documentKeys = Object.keys(process.documentos);
+      const pagareKeys = documentKeys.filter(key => {
+        const keyLower = key.toLowerCase();
+        return keyLower.includes('pagare') || keyLower.includes('pagaré');
+      });
+      
+      console.log('[detectarCantidadPagares] Documentos de pagaré encontrados:', pagareKeys);
+      
+      if (pagareKeys.length > 1) {
+        cantidadPagares = pagareKeys.length;
+        console.log('[detectarCantidadPagares] ✅ Múltiples documentos de pagaré detectados:', cantidadPagares);
+        return cantidadPagares; // Retornar temprano si encontramos documentos múltiples
+      }
+    }
+    
+    // Estrategia 2: Revisar si hay múltiples números de pagaré en los datos (MEJORADA)
+    if (cantidadPagares === 1) {
+      const pagareNumbers = [];
+      
+      // Buscar números de pagaré en diferentes campos posibles con validación
+      if (process.numero_pagare && process.numero_pagare.toString().trim()) {
+        pagareNumbers.push(process.numero_pagare);
+      }
+      if (process.numero_pagare_2 && process.numero_pagare_2.toString().trim()) {
+        pagareNumbers.push(process.numero_pagare_2);
+      }
+      if (process.numero_pagare_3 && process.numero_pagare_3.toString().trim()) {
+        pagareNumbers.push(process.numero_pagare_3);
+      }
+      
+      console.log('[detectarCantidadPagares] Números de pagaré encontrados:', pagareNumbers);
+      
+      // Buscar en array de pagarés si existe
+      if (process.pagares && Array.isArray(process.pagares) && process.pagares.length > 0) {
+        cantidadPagares = process.pagares.length;
+        console.log('[detectarCantidadPagares] ✅ Array de pagarés encontrado:', cantidadPagares);
+        return cantidadPagares;
+      } else if (pagareNumbers.length > 1) {
+        // Verificar que sean números diferentes (no duplicados)
+        const numerosUnicos = [...new Set(pagareNumbers.map(n => n.toString().trim()))];
+        if (numerosUnicos.length > 1) {
+          cantidadPagares = numerosUnicos.length;
+          console.log('[detectarCantidadPagares] ✅ Múltiples números únicos de pagaré:', cantidadPagares, numerosUnicos);
+          return cantidadPagares;
+        }
+      }
+    }
+    
+    // Estrategia 3: Revisar si hay múltiples valores/montos (MEJORADA)
+    if (cantidadPagares === 1) {
+      const valores = [];
+      
+      if (process.valor && process.valor.toString().trim() && process.valor.toString().trim() !== '0') {
+        valores.push(process.valor);
+      }
+      if (process.valor_2 && process.valor_2.toString().trim() && process.valor_2.toString().trim() !== '0') {
+        valores.push(process.valor_2);
+      }
+      if (process.valor_3 && process.valor_3.toString().trim() && process.valor_3.toString().trim() !== '0') {
+        valores.push(process.valor_3);
+      }
+      
+      console.log('[detectarCantidadPagares] Valores encontrados:', valores);
+      
+      if (valores.length > 1) {
+        // Verificar que sean valores diferentes (no duplicados)
+        const valoresUnicos = [...new Set(valores.map(v => v.toString().trim()))];
+        if (valoresUnicos.length > 1) {
+          cantidadPagares = valoresUnicos.length;
+          console.log('[detectarCantidadPagares] ✅ Múltiples valores únicos encontrados:', cantidadPagares, valoresUnicos);
+          return cantidadPagares;
+        }
+      }
+    }
+    
+    // Estrategia 4: NUEVA - Buscar en campos calculados o derivados
+    if (cantidadPagares === 1) {
+      // Buscar campos que indiquen múltiples pagarés
+      const camposMultiples = [];
+      
+      for (const [key, value] of Object.entries(process)) {
+        if (key.includes('_2') || key.includes('_3')) {
+          if (value && value.toString().trim() && value.toString().trim() !== '0') {
+            camposMultiples.push(key);
+          }
+        }
+      }
+      
+      if (camposMultiples.length > 0) {
+        // Estimar cantidad basada en el número más alto encontrado
+        const numeros = camposMultiples.map(campo => {
+          const match = campo.match(/_(\d+)$/);
+          return match ? parseInt(match[1]) : 1;
+        });
+        
+        if (numeros.length > 0) {
+          cantidadPagares = Math.max(...numeros, 1);
+          console.log('[detectarCantidadPagares] ✅ Múltiples pagarés detectados por campos numerados:', cantidadPagares, camposMultiples);
+        }
+      }
+    }
+    
+    // Estrategia 5: NUEVA - Analizar el nombre del cliente para casos especiales
+    if (cantidadPagares === 1 && process.cliente?.razon) {
+      const clienteName = process.cliente.razon.toLowerCase();
+      
+      // COOPEMSURA típicamente maneja 2-3 pagarés
+      if (clienteName.includes('coopemsura') || clienteName.includes('cooperativa')) {
+        console.log('[detectarCantidadPagares] ℹ️  Cliente COOPEMSURA detectado - típicamente 2 pagarés');
+        // No cambiar automáticamente, pero loggear para debugging
+      }
+    }
+    
+    // Limitar a máximo 3 pagarés (según los formatos disponibles)
+    if (cantidadPagares > 3) {
+      console.warn('[detectarCantidadPagares] Cantidad de pagarés excede máximo esperado, limitando a 3');
+      cantidadPagares = 3;
+    }
+    
+    console.log('[detectarCantidadPagares] 🎯 CANTIDAD FINAL DETECTADA:', cantidadPagares);
+    return cantidadPagares;
+    
+  } catch (error) {
+    console.error('[detectarCantidadPagares] Error al detectar cantidad de pagarés:', error);
+    return 1; // Fallback seguro
+  }
+}
+
+// Función MEJORADA para buscar plantilla considerando cantidad de pagarés
+function buscarPlantillaConPagares(files, clientName, cantidadPagares) {
+  console.log('[buscarPlantillaConPagares] 🔍 Buscando plantilla para cliente:', clientName, 'con pagarés:', cantidadPagares);
+  console.log('[buscarPlantillaConPagares] Archivos disponibles:', files);
+  
+  const normalizedClientName = clientName.toLowerCase()
+    .replace(/\./g, '')
+    .replace(/\s+/g, '')
+    .replace(/[^a-z0-9]/g, '');
+  
+  console.log('[buscarPlantillaConPagares] Cliente normalizado:', normalizedClientName);
+  
+  let templateFile = null;
+  
+  // Estrategia 1: Buscar plantilla específica para la cantidad de pagarés (MEJORADA)
+  if (cantidadPagares >= 2) {
+    console.log(`[buscarPlantillaConPagares] 🎯 Buscando plantilla para ${cantidadPagares} pagarés...`);
+    
+    // Patrones más específicos y flexibles
+    const patronesMultiples = [
+      `${cantidadPagares}pagares`,
+      `${cantidadPagares} pagares`,
+      `${cantidadPagares}_pagares`,
+      'multipagares',
+      'multipages'
+    ];
+    
+    // Agregar patrones especiales para COOPEMSURA
+    if (normalizedClientName.includes('coopemsura') || normalizedClientName.includes('cooperativa')) {
+      patronesMultiples.push('2y3pagares', '2 y 3 pagares', '2y3', '2-3');
+    }
+    
+    console.log('[buscarPlantillaConPagares] Patrones a buscar:', patronesMultiples);
+    
+    for (const patron of patronesMultiples) {
+      templateFile = files.find(file => {
+        const normalizedFileName = file.toLowerCase()
+          .replace(/\./g, '')
+          .replace(/\s+/g, '')
+          .replace(/[^a-z0-9]/g, '');
+        
+        const tieneCliente = normalizedFileName.includes(normalizedClientName);
+        const tienePatron = normalizedFileName.includes(patron.replace(/[\s_-]/g, ''));
+        
+        console.log(`[buscarPlantillaConPagares] 📄 "${file}" - Cliente: ${tieneCliente}, Patrón "${patron}": ${tienePatron}`);
+        
+        const esDocx = file.endsWith('.docx') && !file.startsWith('~$');
+        
+        return tieneCliente && tienePatron && esDocx;
+      });
+      
+      if (templateFile) {
+        console.log(`[buscarPlantillaConPagares] ✅ Plantilla encontrada para ${cantidadPagares} pagarés:`, templateFile);
+        return templateFile; // Retornar inmediatamente si encontramos una específica
+      }
+    }
+    
+    console.log(`[buscarPlantillaConPagares] ❌ No se encontró plantilla específica para ${cantidadPagares} pagarés`);
+  }
+  
+  // Estrategia 2: Si no encontró para múltiples pagarés, buscar plantilla estándar (MEJORADA)
+  if (!templateFile) {
+    console.log('[buscarPlantillaConPagares] 🔍 Buscando plantilla estándar...');
+    
+    templateFile = files.find(file => {
+      const normalizedFileName = file.toLowerCase()
+        .replace(/\./g, '')
+        .replace(/\s+/g, '')
+        .replace(/[^a-z0-9]/g, '');
+      
+      const tieneCliente = normalizedFileName.includes(normalizedClientName);
+      
+      // Es estándar si NO contiene indicadores de múltiples pagarés
+      const esEstandar = !normalizedFileName.includes('2pagares') && 
+                        !normalizedFileName.includes('3pagares') && 
+                        !normalizedFileName.includes('2y3pagares') &&
+                        !normalizedFileName.includes('multipagares') &&
+                        !normalizedFileName.includes('2y3') &&
+                        !normalizedFileName.includes('multi');
+      
+      const esDocx = file.endsWith('.docx') && !file.startsWith('~$');
+      
+      console.log(`[buscarPlantillaConPagares] 📄 "${file}" - Cliente: ${tieneCliente}, Estándar: ${esEstandar}, DOCX: ${esDocx}`);
+      
+      return tieneCliente && esEstandar && esDocx;
+    });
+    
+    if (templateFile) {
+      console.log(`[buscarPlantillaConPagares] ✅ Plantilla estándar encontrada:`, templateFile);
+    }
+  }
+  
+  // Estrategia 3: Buscar por palabras clave (fallback MEJORADO)
+  if (!templateFile && clientName) {
+    console.log('[buscarPlantillaConPagares] 🔍 Buscando por palabras clave...');
+    
+    const keywords = clientName.toLowerCase().split(/\s+/).filter(k => k.length > 2);
+    console.log('[buscarPlantillaConPagares] Keywords extraídas:', keywords);
+    
+    // Primero intentar con plantilla específica para múltiples pagarés
+    if (cantidadPagares >= 2) {
+      templateFile = files.find(file => {
+        const lowerFile = file.toLowerCase();
+        const tieneKeyword = keywords.some(keyword => 
+          lowerFile.includes(keyword.toLowerCase())
+        );
+        const esMultiple = lowerFile.includes('2 pagares') || 
+                          lowerFile.includes('3 pagares') || 
+                          lowerFile.includes('2 y 3 pagares') ||
+                          lowerFile.includes('multipagares');
+        
+        const esDocx = file.endsWith('.docx') && !file.startsWith('~$');
+        
+        console.log(`[buscarPlantillaConPagares] 📄 Keywords "${file}" - Keyword: ${tieneKeyword}, Múltiple: ${esMultiple}, DOCX: ${esDocx}`);
+        
+        return tieneKeyword && esMultiple && esDocx;
+      });
+    }
+    
+    // Si no encontró múltiples, buscar estándar por keywords
+    if (!templateFile) {
+      templateFile = files.find(file => {
+        const lowerFile = file.toLowerCase();
+        const tieneKeyword = keywords.some(keyword => 
+          lowerFile.includes(keyword.toLowerCase())
+        );
+        const esEstandar = !lowerFile.includes('2 pagares') && 
+                          !lowerFile.includes('3 pagares') && 
+                          !lowerFile.includes('2 y 3 pagares') &&
+                          !lowerFile.includes('multipagares');
+        
+        const esDocx = file.endsWith('.docx') && !file.startsWith('~$');
+        
+        console.log(`[buscarPlantillaConPagares] 📄 Keywords estándar "${file}" - Keyword: ${tieneKeyword}, Estándar: ${esEstandar}, DOCX: ${esDocx}`);
+        
+        return tieneKeyword && esEstandar && esDocx;
+      });
+    }
+    
+    if (templateFile) {
+      console.log(`[buscarPlantillaConPagares] ✅ Plantilla por keywords encontrada:`, templateFile);
+    }
+  }
+  
+  // Estrategia 4: NUEVA - Fallback ultra flexible
+  if (!templateFile) {
+    console.log('[buscarPlantillaConPagares] 🆘 Fallback: buscando cualquier plantilla que coincida...');
+    
+    // Buscar cualquier archivo que contenga parte del nombre del cliente
+    templateFile = files.find(file => {
+      if (!file.endsWith('.docx') || file.startsWith('~$')) return false;
+      
+      const lowerFile = file.toLowerCase();
+      const lowerClient = clientName.toLowerCase();
+      
+      // Buscar coincidencias parciales
+      const palabrasCliente = lowerClient.split(/\s+/);
+      const tieneCoincidencia = palabrasCliente.some(palabra => 
+        palabra.length > 3 && lowerFile.includes(palabra)
+      );
+      
+      console.log(`[buscarPlantillaConPagares] 📄 Fallback "${file}" - Coincidencia: ${tieneCoincidencia}`);
+      
+      return tieneCoincidencia;
+    });
+    
+    if (templateFile) {
+      console.log(`[buscarPlantillaConPagares] ✅ Plantilla por fallback encontrada:`, templateFile);
+    }
+  }
+  
+  console.log(`[buscarPlantillaConPagares] 🎯 RESULTADO FINAL:`, templateFile || 'NO ENCONTRADA');
+  return templateFile;
 }
