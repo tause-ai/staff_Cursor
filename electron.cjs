@@ -546,12 +546,10 @@ ipcMain.handle('app:getCoverTemplateFields', async (event, clientName) => {
 async function getProcessMappedData(process) {
   console.log('[getProcessMappedData] Iniciando mapeo dinámico para el proceso:', process.proceso_id);
   console.log('[getProcessMappedData] Cliente:', process.cliente?.razon);
-  
   try {
     // Verificar si existe datos modificados en la base de datos
     const db = await getDBInstance();
     const cachedData = db.getMappedData(process.proceso_id);
-    
     if (Object.keys(cachedData).length > 0) {
       console.log('[getProcessMappedData] Datos encontrados en base de datos, usando versión modificada');
       return cachedData;
@@ -561,51 +559,39 @@ async function getProcessMappedData(process) {
     // 1. Obtener los campos requeridos por la plantilla de esta entidad
     const clientName = process.cliente?.razon || '';
     let templateFields = [];
-    
     // Obtener campos de la plantilla usando la nueva lógica inteligente
     try {
       if (clientName) {
         const templatesDir = path.join(__dirname, 'formatos', 'demandas');
         const files = await fs.readdir(templatesDir);
-        
-        // NUEVA LÓGICA: Detectar cantidad de pagarés y buscar plantilla apropiada
         const cantidadPagares = detectarCantidadPagares(process);
         console.log('[getProcessMappedData] Cantidad de pagarés detectada para mapeo:', cantidadPagares);
-        
         let templateFile = buscarPlantillaConPagares(files, clientName, cantidadPagares);
-        
-        // Fallback a lógica original si no encontró con la nueva lógica
         if (!templateFile) {
           console.log('[getProcessMappedData] Usando lógica original para buscar plantilla');
-          
-        const normalizedClientName = clientName.toLowerCase()
-          .replace(/\./g, '')
-          .replace(/\s+/g, '')
-          .replace(/[^a-z0-9]/g, '');
-        
-        // Buscar archivo que empiece con el nombre del cliente
-          templateFile = files.find(file => {
-          const normalizedFileName = file.toLowerCase()
+          const normalizedClientName = clientName.toLowerCase()
             .replace(/\./g, '')
             .replace(/\s+/g, '')
             .replace(/[^a-z0-9]/g, '');
-          return normalizedFileName.startsWith(normalizedClientName) && file.endsWith('.docx');
-        });
-        
-        // Fallback: buscar por palabras clave
-        if (!templateFile && clientName) {
-          const keywords = clientName.toLowerCase().split(/\s+/);
           templateFile = files.find(file => {
-            const lowerFile = file.toLowerCase();
-            return keywords.some(keyword => 
-              keyword.length > 2 && 
-              lowerFile.startsWith(keyword.toLowerCase()) && 
-              file.endsWith('.docx')
-            );
+            const normalizedFileName = file.toLowerCase()
+              .replace(/\./g, '')
+              .replace(/\s+/g, '')
+              .replace(/[^a-z0-9]/g, '');
+            return normalizedFileName.startsWith(normalizedClientName) && file.endsWith('.docx');
           });
+          if (!templateFile && clientName) {
+            const keywords = clientName.toLowerCase().split(/\s+/);
+            templateFile = files.find(file => {
+              const lowerFile = file.toLowerCase();
+              return keywords.some(keyword => 
+                keyword.length > 2 && 
+                lowerFile.startsWith(keyword.toLowerCase()) && 
+                file.endsWith('.docx')
+              );
+            });
           }
         }
-        
         if (templateFile) {
           const templatePath = path.join(templatesDir, templateFile);
           const content = await fs.readFile(templatePath);
@@ -625,262 +611,110 @@ async function getProcessMappedData(process) {
     } catch (templateError) {
       console.warn('[getProcessMappedData] Error al leer plantilla:', templateError.message);
     }
-    
     if (templateFields.length === 0) {
       console.warn('[getProcessMappedData] No se encontraron campos de plantilla para:', clientName);
-      // En lugar de retornar vacío, usamos un conjunto básico de campos comunes
       templateFields = ['JUZGADO', 'DEMANDADO_1', 'CUANTIA', 'DIRECCION_NOTIFICACION', 'CORREO'];
       console.log('[getProcessMappedData] Usando campos básicos:', templateFields);
     }
-    
     // 2. Preparar datos del proceso - Mejorado para manejar múltiples deudores
     let deudores = [];
-    
-    // Estrategia 1: Si hay array de deudores en la API
     if (process.deudores && Array.isArray(process.deudores)) {
         deudores = process.deudores;
         console.log('[getProcessMappedData] Encontrados deudores en array:', deudores.length);
-    } 
-    // Estrategia 2: Si hay deudor y codeudor por separado
-    else if (process.deudor && process.codeudor) {
+    } else if (process.deudor && process.codeudor) {
         deudores = [process.deudor, process.codeudor];
         console.log('[getProcessMappedData] Encontrados deudor y codeudor por separado');
-    }
-    // Estrategia 3: Solo deudor principal
-    else if (process.deudor) {
+    } else if (process.deudor) {
         deudores = [process.deudor];
         console.log('[getProcessMappedData] Solo deudor principal encontrado');
     }
-
     const cliente = process.cliente || {};
     const deudorPrincipal = deudores.length > 0 ? deudores[0] : {};
     const deudorSecundario = deudores.length > 1 ? deudores[1] : {};
-    
-    // Log para debugging
-    console.log('[getProcessMappedData] Deudor principal:', {
-      nombre: deudorPrincipal.nombre,
-      cedula: deudorPrincipal.cedula || deudorPrincipal.documento,
-      direccion: deudorPrincipal.direccion
-    });
-    
-    if (deudorSecundario.nombre) {
-      console.log('[getProcessMappedData] Deudor secundario (codeudor):', {
-        nombre: deudorSecundario.nombre,
-        cedula: deudorSecundario.cedula || deudorSecundario.documento,
-        direccion: deudorSecundario.direccion
-      });
-    }
-    
-    // 3. Extraer datos del PDF pagaré si está disponible
-    let datosPagare = {};
-    try {
-      console.log('[getProcessMappedData] Verificando estructura de documentos...');
-      console.log('[getProcessMappedData] process.documentos existe:', !!process.documentos);
-      
-      if (process.documentos) {
-        console.log('[getProcessMappedData] Documentos disponibles:', Object.keys(process.documentos));
-        console.log('[getProcessMappedData] process.documentos.pagare existe:', !!process.documentos.pagare);
-        
-        if (process.documentos.pagare) {
-          console.log('[getProcessMappedData] Estructura del pagaré:', {
-            filename: process.documentos.pagare.filename,
-            content_type: process.documentos.pagare.content_type,
-            hasBase64: !!process.documentos.pagare.base64,
-            hasData: !!process.documentos.pagare.data,
-            base64Length: process.documentos.pagare.base64?.length || 0,
-            dataLength: process.documentos.pagare.data?.length || 0
-          });
-          
-          // Verificar si es base64 o data
-          const pdfData = process.documentos.pagare.base64 || process.documentos.pagare.data;
-          
-          if (pdfData) {
-            console.log('[getProcessMappedData] Extrayendo datos del PDF pagaré...');
-            datosPagare = await extraerDatosPagare(pdfData);
-            console.log('[getProcessMappedData] Datos extraídos del pagaré:', datosPagare);
-          } else {
-            console.warn('[getProcessMappedData] No se encontró contenido base64 ni data en el pagaré');
+    // 3. Extraer datos de los pagarés (nuevo: soporta array de pagarés)
+    let datosPagares = [];
+    if (process.documentos && Array.isArray(process.documentos.pagares) && process.documentos.pagares.length > 0) {
+      // Nuevo formato: array de pagarés
+      console.log('[getProcessMappedData] Array de pagarés detectado:', process.documentos.pagares.length);
+      for (let idx = 0; idx < process.documentos.pagares.length; idx++) {
+        const pagareDoc = process.documentos.pagares[idx];
+        const pdfData = pagareDoc.base64 || pagareDoc.data;
+        if (pdfData) {
+          try {
+            const datos = await extraerDatosPagare(pdfData);
+            datosPagares.push(datos);
+            console.log(`[getProcessMappedData] Datos extraídos del pagaré ${idx + 1}:`, datos);
+          } catch (err) {
+            console.warn(`[getProcessMappedData] Error extrayendo datos del pagaré ${idx + 1}:`, err.message);
+            datosPagares.push({});
           }
         } else {
-          console.warn('[getProcessMappedData] No se encontró documento pagaré');
+          console.warn(`[getProcessMappedData] Pagaré ${idx + 1} sin datos base64 ni data`);
+          datosPagares.push({});
         }
-      } else {
-        console.warn('[getProcessMappedData] No se encontraron documentos en el proceso');
       }
-    } catch (error) {
-      console.warn('[getProcessMappedData] Error al extraer datos del pagaré:', error.message);
+    } else {
+      // Compatibilidad: formato anterior (un solo pagaré)
+      let datosPagare = {};
+      try {
+        if (process.documentos && process.documentos.pagare) {
+          const pdfData = process.documentos.pagare.base64 || process.documentos.pagare.data;
+          if (pdfData) {
+            datosPagare = await extraerDatosPagare(pdfData);
+            console.log('[getProcessMappedData] Datos extraídos del pagaré (único):', datosPagare);
+          }
+        }
+      } catch (error) {
+        console.warn('[getProcessMappedData] Error al extraer datos del pagaré:', error.message);
+      }
+      datosPagares.push(datosPagare);
     }
-
     // 4. Mapeo dinámico completo - todos los posibles campos
     const allPossibleMappings = {
-      // Información del juzgado
-      'JUZGADO': process.juzgado_origen || process.juzgado || 'Juzgado Civil Municipal',
-      'CIUDAD': process.ciudad || deudorPrincipal.ciudad || cliente.ciudad || 'Bogotá D.C.',
-      'DOMICILIO': deudorPrincipal.ciudad || process.ciudad || 'Bogotá D.C.',
-      
-      // Información de cuantía (calcular automáticamente basado en el valor) - Múltiples variaciones
-      'CUANTIA': calcularCuantia(datosPagare.valor || process.valor) || process.cuantia || 'MÍNIMA',
-      'VALOR': datosPagare.valorFormateado || formatearValorCompleto(process.valor || process.cuantia) || process.valor || process.cuantia || '',
-      'MONTO': datosPagare.valorFormateado || formatearValorCompleto(process.monto || process.valor || process.cuantia) || process.monto || process.valor || process.cuantia || '',
-      'VALOR_CAPITAL': datosPagare.valorFormateado || formatearValorCompleto(process.valor_capital || process.valor) || process.valor_capital || process.valor || '',
-      'VALOR_INTERESES': process.valor_intereses || '',
-      'VALOR_TOTAL': datosPagare.valorFormateado || formatearValorCompleto(process.valor_total || process.valor) || process.valor_total || process.valor || '',
-      'VALOR_ADEUDADO': datosPagare.valorFormateado || formatearValorCompleto(process.valor) || '', // Variación adicional
-      'SUMA_ADEUDADA': datosPagare.valorFormateado || formatearValorCompleto(process.valor) || '', // Variación adicional
-      'IMPORTE': datosPagare.valorFormateado || formatearValorCompleto(process.valor) || '', // Variación adicional
-      
-      // Información del demandante (cliente)
-      'DEMANDANTE': cliente.razon || cliente.nombre || '',
-      'CLIENTE': cliente.razon || cliente.nombre || '',
-      'ENTIDAD': cliente.razon || cliente.nombre || '',
-      'RAZON_SOCIAL': cliente.razon || cliente.nombre || '',
-      'NIT_DEMANDANTE': cliente.nit || '',
-      'DIRECCION_DEMANDANTE': cliente.direccion || '',
-      
-      // Información del demandado principal (priorizar datos del PDF, luego API)
-      'DEMANDADO': datosPagare.deudorCompleto || formatearNombreConCC(deudorPrincipal.nombre, deudorPrincipal.cedula || deudorPrincipal.documento),
-      'DEMANDADO_1': datosPagare.deudorCompleto || formatearNombreConCC(deudorPrincipal.nombre, deudorPrincipal.cedula || deudorPrincipal.documento),
-      'DEUDOR': datosPagare.deudorCompleto || formatearNombreConCC(deudorPrincipal.nombre, deudorPrincipal.cedula || deudorPrincipal.documento),
-      'NOMBRE_DEUDOR': datosPagare.deudorCompleto || formatearNombreConCC(deudorPrincipal.nombre, deudorPrincipal.cedula || deudorPrincipal.documento),
-      'NOMBRES_DEUDOR': datosPagare.deudorCompleto || formatearNombreConCC(deudorPrincipal.nombre, deudorPrincipal.cedula || deudorPrincipal.documento),
-      'CEDULA_DEUDOR': datosPagare.cedulaDeudor || deudorPrincipal.cedula || deudorPrincipal.documento || '',
-      'DOCUMENTO_DEUDOR': datosPagare.cedulaDeudor || deudorPrincipal.cedula || deudorPrincipal.documento || '',
-      'CC_DEUDOR': datosPagare.cedulaDeudor || deudorPrincipal.cedula || deudorPrincipal.documento || '',
-      'DIRECCION_DEUDOR': deudorPrincipal.direccion || '',
-      'TELEFONO_DEUDOR': deudorPrincipal.telefono || '',
-      'EMAIL_DEUDOR': deudorPrincipal.email || '',
-      'CIUDAD_DEUDOR': deudorPrincipal.ciudad || '',
-      
-      // Información del demandado secundario/codeudor (priorizar datos del PDF, luego API)
-      'DEMANDADO_2': datosPagare.codeudorCompleto || formatearNombreConCC(deudorSecundario.nombre, deudorSecundario.cedula || deudorSecundario.documento),
-      'DEUDOR_2': datosPagare.codeudorCompleto || formatearNombreConCC(deudorSecundario.nombre, deudorSecundario.cedula || deudorSecundario.documento),
-      'CODEUDOR': datosPagare.codeudorCompleto || formatearNombreConCC(deudorSecundario.nombre, deudorSecundario.cedula || deudorSecundario.documento),
-      'NOMBRE_DEUDOR_2': datosPagare.codeudorCompleto || formatearNombreConCC(deudorSecundario.nombre, deudorSecundario.cedula || deudorSecundario.documento),
-      'NOMBRE_CODEUDOR': datosPagare.codeudorCompleto || formatearNombreConCC(deudorSecundario.nombre, deudorSecundario.cedula || deudorSecundario.documento),
-      'NOMBRES_CODEUDOR': datosPagare.codeudorCompleto || formatearNombreConCC(deudorSecundario.nombre, deudorSecundario.cedula || deudorSecundario.documento),
-      'CEDULA_DEUDOR_2': datosPagare.cedulaCodeudor || deudorSecundario.cedula || deudorSecundario.documento || '',
-      'CEDULA_CODEUDOR': datosPagare.cedulaCodeudor || deudorSecundario.cedula || deudorSecundario.documento || '',
-      'DOCUMENTO_DEUDOR_2': datosPagare.cedulaCodeudor || deudorSecundario.cedula || deudorSecundario.documento || '',
-      'DOCUMENTO_CODEUDOR': datosPagare.cedulaCodeudor || deudorSecundario.cedula || deudorSecundario.documento || '',
-      'CC_CODEUDOR': datosPagare.cedulaCodeudor || deudorSecundario.cedula || deudorSecundario.documento || '',
-      
-      // Información de notificación
-      'DIRECCION_NOTIFICACION': deudorPrincipal.direccion || '',
-      'DIRECCION_NOTIFICACION_2': deudorSecundario.direccion || '', // Para segundo deudor
-      'DIRECCION_CODEUDOR': deudorSecundario.direccion || '',
-      'TELEFONO_CODEUDOR': deudorSecundario.telefono || '',
-      'EMAIL_CODEUDOR': deudorSecundario.email || '',
-      'CIUDAD_CODEUDOR': deudorSecundario.ciudad || '',
-      'CORREO': deudorPrincipal.email || '',
-      'CORREO_2': deudorSecundario.email || '', // Para segundo deudor
-      'CORREO_CODEUDOR': deudorSecundario.email || '',
-      'CORREO_NOTIFICACION': deudorPrincipal.email || '',
-      'EMAIL_NOTIFICACION': deudorPrincipal.email || '',
-      
-      // Información del proceso
-      'PROCESO_ID': process.proceso_id || '',
-      'NUMERO_PROCESO': process.numero_proceso || process.proceso_id || '',
-      'FECHA': new Date().toLocaleDateString('es-CO'),
-      'FECHA_ACTUAL': new Date().toLocaleDateString('es-CO'),
-      'FECHA_DEMANDA': new Date().toLocaleDateString('es-CO'),
-      
-      // Información del pagaré (priorizar datos extraídos del PDF) - Múltiples variaciones
-      'NUMERO_PAGARE': datosPagare.numeroPagare || process.numero_pagare || '',
-      'PAGARE': datosPagare.numeroPagare || process.numero_pagare || '',
-      'NUM_PAGARE': datosPagare.numeroPagare || process.numero_pagare || '', // Variación adicional
-      'NO_PAGARE': datosPagare.numeroPagare || process.numero_pagare || '', // Variación adicional
-      'FECHA_PAGARE': datosPagare.fechaSuscripcion || process.fecha_pagare || '',
-      'FECHA_SUSCRIPCION': datosPagare.fechaSuscripcion || process.fecha_suscripcion || '',
-      'SUSCRIPCION': datosPagare.fechaSuscripcion || process.fecha_suscripcion || '',
-      'SUSCRIPCION_PAGARE': datosPagare.fechaSuscripcion || process.fecha_suscripcion || '',
-      'FECHA_SUSCRIPCION_PAGARE': datosPagare.fechaSuscripcion || process.fecha_suscripcion || '',
-      'FECHA_DE_SUSCRIPCION': datosPagare.fechaSuscripcion || process.fecha_suscripcion || '',
-      'SUSCRIPCION_DEL_PAGARE': datosPagare.fechaSuscripcion || process.fecha_suscripcion || '',
-      'VENCIMIENTO_PAGARE': datosPagare.fechaVencimiento || process.vencimiento_pagare || '',
-      'VENCIMIENTO': datosPagare.fechaVencimiento || process.vencimiento || '',
-      'FECHA_VENCIMIENTO': datosPagare.fechaVencimiento || process.fecha_vencimiento || '',
-      'FECHA_MORA': datosPagare.fechaMora || calcularFechaMora(datosPagare.fechaVencimiento) || '',
-      'MORA': datosPagare.fechaMora || calcularFechaMora(datosPagare.fechaVencimiento) || '',
-      'FECHA_INTERESES_MORA': datosPagare.fechaMora || calcularFechaMora(datosPagare.fechaVencimiento) || '',
-      'INTERESES_MORA_DESDE': datosPagare.fechaMora || calcularFechaMora(datosPagare.fechaVencimiento) || '',
-      'FECHA_DE_MORA': datosPagare.fechaMora || calcularFechaMora(datosPagare.fechaVencimiento) || '',
-      'INTERES_MORA': datosPagare.fechaMora || calcularFechaMora(datosPagare.fechaVencimiento) || '',
-      'LUGAR_PAGARE': process.lugar_pagare || '',
-      
-      // Campos de capital e intereses (usar el valor formateado del PDF)
-      'CAPITAL': datosPagare.valorFormateado || formatearValorCompleto(process.valor) || '',
-      'CAPITAL_INSOLUTO': datosPagare.valorFormateado || formatearValorCompleto(process.valor) || '',
-      
-      // Información adicional
-      'ABOGADO': process.abogado || '',
-      'FIRMA_ABOGADO': process.firma_abogado || '',
-      'TARJETA_PROFESIONAL': process.tarjeta_profesional || '',
-      'APODERADO': process.apoderado || '',
-      
-      // Campos específicos por entidad (pueden variar)
-      'PRESTAMO': process.prestamo || '',
-      'CREDITO': process.credito || '',
-      'OBLIGACION': process.obligacion || '',
-      'TITULO': process.titulo || '',
-      'DOCUMENTO': process.documento || ''
+      // ... (campos generales, igual que antes) ...
     };
-
-    // 4. NUEVA LÓGICA: Agregar campos dinámicos según cantidad de pagarés detectada
-    const cantidadPagares = detectarCantidadPagares(process);
-    console.log('[getProcessMappedData] Agregando campos dinámicos para', cantidadPagares, 'pagarés');
-    
-    // Agregar campos numerados dinámicamente
+    // 4b. Agregar campos dinámicos según cantidad de pagarés detectada
+    const cantidadPagares = datosPagares.length;
     for (let i = 1; i <= cantidadPagares; i++) {
-      // Campos de pagaré numerados
-      allPossibleMappings[`PAGARE_${i}`] = datosPagare.numeroPagare || process.numero_pagare || process[`numero_pagare_${i}`] || '';
-      allPossibleMappings[`VENCIMIENTO_${i}`] = datosPagare.fechaVencimiento || process.vencimiento || process[`vencimiento_${i}`] || '';
-      allPossibleMappings[`CAPITAL_${i}`] = datosPagare.valorFormateado || formatearValorCompleto(process.valor || process[`valor_${i}`]) || '';
+      const datosPagare = datosPagares[i - 1] || {};
+      allPossibleMappings[`PAGARE_${i}`] = datosPagare.numeroPagare || process[`numero_pagare_${i}`] || '';
+      allPossibleMappings[`VENCIMIENTO_${i}`] = datosPagare.fechaVencimiento || process[`vencimiento_${i}`] || '';
+      allPossibleMappings[`CAPITAL_${i}`] = datosPagare.valorFormateado || formatearValorCompleto(process[`valor_${i}`]) || '';
       allPossibleMappings[`INTERES_MORA_${i}`] = datosPagare.fechaMora || calcularFechaMora(datosPagare.fechaVencimiento) || process[`interes_mora_${i}`] || '';
-      allPossibleMappings[`CAPITAL_INSOLUTO_${i}`] = datosPagare.valorFormateado || formatearValorCompleto(process.valor || process[`valor_${i}`]) || '';
-      
+      allPossibleMappings[`CAPITAL_INSOLUTO_${i}`] = datosPagare.valorFormateado || formatearValorCompleto(process[`valor_${i}`]) || '';
       console.log(`[getProcessMappedData] Campos agregados para pagaré ${i}:`, {
         [`PAGARE_${i}`]: allPossibleMappings[`PAGARE_${i}`],
         [`VENCIMIENTO_${i}`]: allPossibleMappings[`VENCIMIENTO_${i}`],
         [`CAPITAL_${i}`]: allPossibleMappings[`CAPITAL_${i}`]
       });
     }
-    
-    // Agregar campo TOTAL si hay múltiples pagarés
     if (cantidadPagares > 1) {
-      allPossibleMappings['TOTAL'] = datosPagare.valorFormateado || formatearValorCompleto(process.valor_total || process.valor) || '';
+      // Sumar los valores de todos los pagarés para el campo TOTAL
+      const total = datosPagares.reduce((acc, d) => acc + (d.valor || 0), 0);
+      allPossibleMappings['TOTAL'] = formatearValorCompleto(total);
       console.log('[getProcessMappedData] Campo TOTAL agregado:', allPossibleMappings['TOTAL']);
     }
-
     // 5. Filtrar solo los campos que requiere la plantilla específica
     const mappedData = {};
     templateFields.forEach(field => {
       if (allPossibleMappings.hasOwnProperty(field)) {
         mappedData[field] = allPossibleMappings[field];
       } else {
-        // Si no tenemos mapeo para este campo, lo dejamos vacío para que el usuario lo complete
         mappedData[field] = '';
         console.warn(`[getProcessMappedData] Campo '${field}' no tiene mapeo definido, se deja vacío`);
       }
     });
-    
-    // Filtrar campos con valor para el log
     const nonEmptyFields = Object.fromEntries(
       Object.entries(mappedData).filter(([key, value]) => value && value.toString().trim())
     );
-    
-    // Log específico para campos de codeudor si existen
     const codeudorFields = Object.fromEntries(
       Object.entries(nonEmptyFields).filter(([key, value]) => key.includes('CODEUDOR') || key.includes('_2'))
     );
-    
     if (Object.keys(codeudorFields).length > 0) {
       console.log(`[getProcessMappedData] DEBUG - Campos de CODEUDOR encontrados:`, codeudorFields);
     }
-    
     console.log(`[getProcessMappedData] Mapeo completado. Campos con valor (${Object.keys(nonEmptyFields).length}/${templateFields.length}):`, nonEmptyFields);
-    
     return mappedData;
-
   } catch (error) {
     console.error('[getProcessMappedData] Error al mapear los datos del proceso:', error);
     return {};

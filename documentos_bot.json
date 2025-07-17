@@ -1,0 +1,55 @@
+{
+  "proceso_id": 71008,
+  "cliente": {
+    "nit": "900215071",
+    "razon": "Bancamia"
+  },
+  "deudor": {
+    "identificacion": "1115795189",
+    "tipo_identificacion": "Cedula de Ciudadania",
+    "nombre": "ANDREA PAOLA ROJAS BARRRERA"
+  },
+  "codeudores": [
+    {
+      "identificacion": "26437745",
+      "tipo_identificacion": "Cedula de Ciudadania",
+      "nombre": "GLORIA YINEDT BARRERA GOMEZ"
+    }
+  ],
+  "abogados": [
+    {
+      "identificacion": "8163046",
+      "tipo_identificacion": "Cedula de Ciudadania",
+      "nombre": "Juan Camilo Saldarriaga Cano",
+      "firma": {
+        "filename": "abogado_adjunto_1.png",
+        "content_type": "application/png",
+        "data": "..."
+      }
+    }
+  ],
+  "documentos": {
+    "ubica": {
+      "filename": "gestion_adjunto_71008_6571675.pdf",
+      "content_type": "application/pdf",
+      "data": "...."
+    },
+      "poder": {
+      "filename": "gestion_adjunto_71008_6325946.pdf",
+      "content_type": "application/pdf",
+      "data": "..."
+    },
+    "pagares": [
+      {
+        "filename": "factura_71008_89621.pdf",
+        "content_type": "application/pdf",
+        "data": "...."
+      },
+     {
+        "filename": "factura_71008_89620.pdf",
+        "content_type": "application/pdf",
+        "data": "...."
+      }
+    ]
+  }
+}

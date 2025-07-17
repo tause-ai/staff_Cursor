@@ -766,29 +766,42 @@ function App() {
           {detailTab === 2 && (
             <Box sx={{ p: 3 }}>
               <Typography variant="h6" gutterBottom>Documentos Adjuntos</Typography>
-              {selectedProcess?.documentos && Object.values(selectedProcess.documentos).filter(doc => doc && doc.filename).length > 0 ? (
-                <MuiList>
-                  {Object.values(selectedProcess.documentos).filter(doc => doc && doc.filename).map((doc, index) => (
-                    <ListItem key={index} secondaryAction={
-                      <Button 
-                        variant="outlined" 
-                        startIcon={<Download />}
-                        onClick={() => handleDownloadDoc({ name: doc.filename, base64: doc.data })}
-                        disabled={!doc.data}
-                      >
-                        Descargar
-                      </Button>
-                    }>
-                      <ListItemIcon><DescriptionIcon /></ListItemIcon>
-                      <ListItemText 
-                        primary={doc.filename}
-                        secondary={doc.data ? null : "Contenido no disponible"}
-                      />
-                    </ListItem>
-                  ))}
-                </MuiList>
-              ) : (
-                <Typography sx={{ mt: 2 }}>No hay documentos adjuntos para este proceso.</Typography>
+              {selectedProcess?.documentos && (
+                (() => {
+                  // Documentos individuales (ubica, poder, etc.)
+                  const docsInd = Object.values(selectedProcess.documentos)
+                    .filter(doc => doc && doc.filename && !Array.isArray(doc));
+                  // Pagarés (array)
+                  const pagarArray = Array.isArray(selectedProcess.documentos.pagares)
+                    ? selectedProcess.documentos.pagares.filter(p => p && p.filename)
+                    : [];
+                  // Unir ambos para mostrar
+                  const allDocs = [...docsInd, ...pagarArray];
+                  return allDocs.length > 0 ? (
+                    <MuiList>
+                      {allDocs.map((doc, index) => (
+                        <ListItem key={index} secondaryAction={
+                          <Button 
+                            variant="outlined" 
+                            startIcon={<Download />}
+                            onClick={() => handleDownloadDoc({ name: doc.filename, base64: doc.data })}
+                            disabled={!doc.data}
+                          >
+                            Descargar
+                          </Button>
+                        }>
+                          <ListItemIcon><DescriptionIcon /></ListItemIcon>
+                          <ListItemText 
+                            primary={doc.filename}
+                            secondary={doc.data ? null : "Contenido no disponible"}
+                          />
+                        </ListItem>
+                      ))}
+                    </MuiList>
+                  ) : (
+                    <Typography sx={{ mt: 2 }}>No hay documentos adjuntos para este proceso.</Typography>
+                  );
+                })()
               )}
             </Box>
           )}
