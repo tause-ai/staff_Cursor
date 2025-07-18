@@ -348,7 +348,18 @@ ipcMain.handle('app:getTemplateFields', async (event, clientName, process = null
     // Si tenemos información del proceso, usar la nueva lógica que considera pagarés
     if (process) {
       console.log(`[getTemplateFields] Usando lógica inteligente de selección con proceso:`, process.proceso_id);
-      const cantidadPagares = detectarCantidadPagares(process);
+      
+      // Usar lógica básica de detección (sin extraer PDFs aquí para evitar duplicación)
+      let cantidadPagares = 1; // Default
+      
+      // Detectar por múltiples deudores (deudor principal + codeudores)
+      if (process.codeudores && Array.isArray(process.codeudores) && process.codeudores.length > 0) {
+        cantidadPagares = 1 + process.codeudores.length; // deudor principal + codeudores
+        console.log(`[getTemplateFields] ✅ Detectados ${cantidadPagares} pagarés por cantidad de deudores`);
+      } else {
+        console.log(`[getTemplateFields] ✅ Detectado 1 pagaré (sin codeudores)`);
+      }
+      
       templateFile = buscarPlantillaConPagares(files, clientName, cantidadPagares);
     }
     
@@ -575,29 +586,42 @@ async function getProcessMappedData(process, templateFields = []) {
     });
   }
   
-  // 2. Extraer datos del PDF pagaré (igual que en portadas)
-  let datosPagare = {};
+  // 2. Extraer datos de TODOS los PDFs de pagaré (MEJORADO para múltiples pagarés)
+  let datosPagares = []; // Array para almacenar datos de todos los pagarés
   try {
     console.log('[getProcessMappedData] Verificando documentos disponibles:', Object.keys(process.documentos || {}));
     
     // Buscar pagaré en diferentes variaciones del nombre
     let pagareDoc = process.documentos?.pagare || process.documentos?.pagares || process.documentos?.pagare_1;
     
-    // Si es un array, tomar el primer elemento
+    // Procesar múltiples pagarés si es un array
     if (Array.isArray(pagareDoc)) {
-      console.log('[getProcessMappedData] Documento pagares es array con', pagareDoc.length, 'elementos, usando el primero');
-      pagareDoc = pagareDoc[0];
-    }
-    
-    if (pagareDoc) {
-      console.log('[getProcessMappedData] PDF del pagaré encontrado, verificando datos...');
+      console.log('[getProcessMappedData] Documento pagares es array con', pagareDoc.length, 'elementos, procesando todos');
+      
+      for (let i = 0; i < pagareDoc.length; i++) {
+        const pdfData = pagareDoc[i].base64 || pagareDoc[i].data;
+        if (pdfData) {
+          console.log(`[getProcessMappedData] Procesando pagaré ${i + 1}/${pagareDoc.length}...`);
+          const datosIndividuales = await extraerDatosPagare(pdfData);
+          datosPagares.push(datosIndividuales);
+          console.log(`[getProcessMappedData] Datos extraídos del pagaré ${i + 1}:`, datosIndividuales);
+        } else {
+          console.warn(`[getProcessMappedData] Pagaré ${i + 1} no tiene datos base64/data`);
+          datosPagares.push({});
+        }
+      }
+    } else if (pagareDoc) {
+      // Procesar pagaré único
+      console.log('[getProcessMappedData] PDF del pagaré único encontrado, verificando datos...');
       const pdfData = pagareDoc.base64 || pagareDoc.data;
       if (pdfData) {
         console.log('[getProcessMappedData] Datos del PDF disponibles, iniciando extracción...');
-        datosPagare = await extraerDatosPagare(pdfData);
+        const datosPagare = await extraerDatosPagare(pdfData);
+        datosPagares.push(datosPagare);
         console.log('[getProcessMappedData] Datos extraídos del PDF:', datosPagare);
       } else {
         console.warn('[getProcessMappedData] PDF del pagaré no tiene datos base64/data');
+        datosPagares.push({});
       }
     } else {
       console.warn('[getProcessMappedData] No se encontró PDF del pagaré en los documentos');
@@ -606,37 +630,57 @@ async function getProcessMappedData(process, templateFields = []) {
     console.warn('[getProcessMappedData] Error al extraer datos del pagaré:', error.message);
   }
 
-  // 3. Mapeo de pagarés usando datos extraídos del PDF
-  console.log('[getProcessMappedData] Mapeando campos del pagaré...');
+  // 3. Mapeo de pagarés usando datos extraídos de TODOS los PDFs
+  console.log('[getProcessMappedData] Mapeando campos de', datosPagares.length, 'pagaré(s)...');
   
-  if (datosPagare && Object.keys(datosPagare).length > 0) {
-    // Mapear campos base usando datos del PDF
-    if (datosPagare.numeroPagare) mappedData['PAGARE'] = datosPagare.numeroPagare;
-    if (datosPagare.valorFormateado) mappedData['CAPITAL'] = datosPagare.valorFormateado;
-    if (datosPagare.fechaSuscripcion) mappedData['SUSCRIPCION'] = datosPagare.fechaSuscripcion;
-    if (datosPagare.fechaVencimiento) mappedData['VENCIMIENTO'] = datosPagare.fechaVencimiento;
-    if (datosPagare.fechaMora) mappedData['INTERES_MORA'] = datosPagare.fechaMora;
+  if (datosPagares.length > 0) {
+    // Mapear campos base usando datos del PRIMER pagaré
+    const primerPagare = datosPagares[0];
+    if (primerPagare.numeroPagare) mappedData['PAGARE'] = primerPagare.numeroPagare;
+    if (primerPagare.valorFormateado) mappedData['CAPITAL'] = primerPagare.valorFormateado;
+    if (primerPagare.fechaSuscripcion) mappedData['SUSCRIPCION'] = primerPagare.fechaSuscripcion;
+    if (primerPagare.fechaVencimiento) mappedData['VENCIMIENTO'] = primerPagare.fechaVencimiento;
+    if (primerPagare.fechaMora) mappedData['INTERES_MORA'] = primerPagare.fechaMora;
     
-    // Campos numerados (para compatibilidad con múltiples pagarés)
-    if (datosPagare.numeroPagare) mappedData['PAGARE_1'] = datosPagare.numeroPagare;
-    if (datosPagare.valorFormateado) mappedData['CAPITAL_1'] = datosPagare.valorFormateado;
-    if (datosPagare.fechaSuscripcion) mappedData['SUSCRIPCION_1'] = datosPagare.fechaSuscripcion;
-    if (datosPagare.fechaVencimiento) mappedData['VENCIMIENTO_1'] = datosPagare.fechaVencimiento;
-    if (datosPagare.fechaMora) mappedData['INTERES_MORA_1'] = datosPagare.fechaMora;
+    // Mapear campos numerados para CADA pagaré
+    datosPagares.forEach((datos, index) => {
+      const suffix = index + 1;
+      if (datos.numeroPagare) mappedData[`PAGARE_${suffix}`] = datos.numeroPagare;
+      if (datos.valorFormateado) mappedData[`CAPITAL_${suffix}`] = datos.valorFormateado;
+      if (datos.fechaSuscripcion) mappedData[`SUSCRIPCION_${suffix}`] = datos.fechaSuscripcion;
+      if (datos.fechaVencimiento) mappedData[`VENCIMIENTO_${suffix}`] = datos.fechaVencimiento;
+      if (datos.fechaMora) mappedData[`INTERES_MORA_${suffix}`] = datos.fechaMora;
+    });
     
-    console.log('[getProcessMappedData] Campos del pagaré mapeados desde PDF');
+    // Calcular TOTAL sumando todos los valores
+    const totalValor = datosPagares.reduce((sum, datos) => {
+      return sum + (datos.valor || 0);
+    }, 0);
+    
+    if (totalValor > 0) {
+      mappedData['TOTAL'] = formatearValorCompleto(totalValor);
+      console.log('[getProcessMappedData] TOTAL calculado para', datosPagares.length, 'pagarés:', mappedData['TOTAL']);
+    }
+    
+    console.log('[getProcessMappedData] Campos de todos los pagarés mapeados desde PDFs');
   }
   
   // 4. Mapeo de pagarés desde estructura legacy (fallback)
   let pagares = [];
   if (process.documentos?.pagares && Array.isArray(process.documentos.pagares)) {
     pagares = process.documentos.pagares;
+    console.log('[getProcessMappedData] Pagarés encontrados en array:', pagares.length);
   } else if (process.documentos?.pagare) {
     pagares = [process.documentos.pagare];
+    console.log('[getProcessMappedData] Pagaré único encontrado');
   } else if (process.documentos?.pagare_1) {
     pagares = [process.documentos.pagare_1];
+    console.log('[getProcessMappedData] Pagaré numerado encontrado');
   }
+  
   console.log('[getProcessMappedData] Procesando', pagares.length, 'pagarés legacy');
+  
+  // 4.1 Ya no es necesario duplicar datos porque procesamos todos los PDFs individualmente
   
   if (pagares.length > 0) {
     // DEBUG: Mostrar estructura de cada pagaré
@@ -679,10 +723,10 @@ async function getProcessMappedData(process, templateFields = []) {
     }
   }
   
-  // 3. Campos adicionales que pueden venir directamente del proceso
-  if (process.juzgado) mappedData['JUZGADO'] = process.juzgado;
-  if (process.domicilio) mappedData['DOMICILIO'] = process.domicilio;
-  if (process.cuantia) mappedData['CUANTIA'] = process.cuantia;
+  // 3. Campos básicos de demanda (con valores por defecto como en portadas)
+  mappedData['JUZGADO'] = process.juzgado_origen || process.juzgado || 'Juzgado Civil Municipal';
+  mappedData['DOMICILIO'] = process.deudor?.ciudad || process.ciudad || process.cliente?.ciudad || 'Bogotá D.C.';
+  mappedData['CUANTIA'] = process.cuantia || 'MÍNIMA';
   
   console.log('[getProcessMappedData] Mapeo completado. Total campos:', Object.keys(mappedData).length);
   console.log('[getProcessMappedData] Campos mapeados:', mappedData);
@@ -1197,8 +1241,21 @@ ipcMain.handle('app:diligenciarDemanda', async (event, proceso) => {
     const files = await fs.readdir(templatesDir);
     console.log('[diligenciarDemanda] Archivos disponibles:', files);
     
-    // NUEVA LÓGICA: Detectar cantidad de pagarés y buscar plantilla apropiada
-    const cantidadPagares = detectarCantidadPagares(proceso);
+    // NUEVA LÓGICA: Detectar cantidad de pagarés usando los datos ya mapeados
+    // Esto evita conflictos con múltiples detecciones simultáneas
+    let cantidadPagares = 1; // Default
+    
+    // Detectar por campos mapeados (más confiable que la función general)
+    const camposPagare2 = ['PAGARE_2', 'CAPITAL_2', 'VENCIMIENTO_2'];
+    const tienePagare2 = camposPagare2.some(campo => mappedData[campo] && mappedData[campo].toString().trim());
+    
+    if (tienePagare2) {
+      cantidadPagares = 2;
+      console.log('[diligenciarDemanda] ✅ Detectados 2 pagarés por campos mapeados');
+    } else {
+      console.log('[diligenciarDemanda] ✅ Detectado 1 pagaré por campos mapeados');
+    }
+    
     console.log('[diligenciarDemanda] Cantidad de pagarés detectada:', cantidadPagares);
     
     let templateFile = buscarPlantillaConPagares(files, clientName, cantidadPagares);
@@ -2193,10 +2250,17 @@ function detectarCantidadPagares(process) {
       
       console.log('[detectarCantidadPagares] Números de pagaré encontrados:', pagareNumbers);
       
-      // Buscar en array de pagarés si existe
-      if (process.pagares && Array.isArray(process.pagares) && process.pagares.length > 0) {
-        cantidadPagares = process.pagares.length;
-        console.log('[detectarCantidadPagares] ✅ Array de pagarés encontrado:', cantidadPagares);
+      // Buscar en array de pagarés si existe (revisar tanto en raíz como en documentos)
+      const pagaresArray = process.pagares || process.documentos?.pagares;
+      console.log('[detectarCantidadPagares] DEBUG - process.pagares:', !!process.pagares);
+      console.log('[detectarCantidadPagares] DEBUG - process.documentos?.pagares:', !!process.documentos?.pagares);
+      console.log('[detectarCantidadPagares] DEBUG - pagaresArray tipo:', typeof pagaresArray);
+      console.log('[detectarCantidadPagares] DEBUG - pagaresArray es array:', Array.isArray(pagaresArray));
+      console.log('[detectarCantidadPagares] DEBUG - pagaresArray longitud:', pagaresArray?.length);
+      
+      if (pagaresArray && Array.isArray(pagaresArray) && pagaresArray.length > 0) {
+        cantidadPagares = pagaresArray.length;
+        console.log('[detectarCantidadPagares] ✅ Array de pagarés encontrado:', cantidadPagares, 'en', process.pagares ? 'raíz' : 'documentos');
         return cantidadPagares;
       } else if (pagareNumbers.length > 1) {
         // Verificar que sean números diferentes (no duplicados)
@@ -2263,7 +2327,34 @@ function detectarCantidadPagares(process) {
       }
     }
     
-    // Estrategia 5: NUEVA - Analizar el nombre del cliente para casos especiales
+    // Estrategia 5: NUEVA - Detectar basado en cantidad de deudores (deudor principal + codeudores)
+    if (cantidadPagares === 1) {
+      let totalDeudores = 1; // Siempre hay al menos un deudor principal
+      
+      // Contar codeudores
+      if (process.codeudores && Array.isArray(process.codeudores)) {
+        totalDeudores += process.codeudores.length;
+        console.log('[detectarCantidadPagares] Codeudores encontrados:', process.codeudores.length);
+      }
+      
+      // En entidades como Bancamia, cada deudor típicamente tiene su propio pagaré
+      if (totalDeudores > 1) {
+        const clienteName = process.cliente?.razon?.toLowerCase() || '';
+        
+        // Aplicar lógica específica por entidad
+        if (clienteName.includes('bancamia') || 
+            clienteName.includes('banco') ||
+            clienteName.includes('coopemsura') || 
+            clienteName.includes('cooperativa')) {
+          
+          cantidadPagares = totalDeudores;
+          console.log('[detectarCantidadPagares] ✅ Múltiples pagarés detectados por cantidad de deudores:', cantidadPagares, `(${totalDeudores} deudores en ${clienteName})`);
+          return cantidadPagares;
+        }
+      }
+    }
+    
+    // Estrategia 6: NUEVA - Analizar el nombre del cliente para casos especiales
     if (cantidadPagares === 1 && process.cliente?.razon) {
       const clienteName = process.cliente.razon.toLowerCase();
       
