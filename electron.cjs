@@ -25,7 +25,7 @@ function createWindow() {
       nodeIntegration: false,
       contextIsolation: true,
       enableRemoteModule: false,
-      preload: path.join(__dirname, 'src/preload.js') // Corregimos la ruta al preload
+      preload: path.join(__dirname, 'preload.js') // Ruta corregida al preload
     },
     // icon: path.join(__dirname, 'assets/icon.png'), // Opcional
     titleBarStyle: 'default',
@@ -81,9 +81,15 @@ const numerosALetras = new NumerosALetras();
 async function getDBInstance() {
   try {
     const db = getDatabase();
-    const stats = db.getStats();
     
-    console.log(`[Electron Backend] Base de datos SQLite - Procesos: ${stats.procesos}, Datos editados: ${stats.mapped_data}`);
+    // Verificar que la base de datos esté correctamente inicializada
+    if (!db || !db.db) {
+      console.warn('[Electron Backend] Base de datos no inicializada correctamente');
+      return db; // Devolver la instancia aunque no esté inicializada
+    }
+    
+    const stats = db.getStats();
+    console.log(`[Electron Backend] Base de datos SQLite - Procesos: ${stats.procesos}, Datos editados: ${stats.mappedData}`);
     
     return db;
   } catch (error) {
@@ -151,21 +157,40 @@ ipcMain.handle('app:getProcesses', async () => {
 
     const allDetailsResults = await Promise.all(processDetailsPromises);
     
-    // Filtramos los resultados nulos y enriquecemos los datos
-    const enrichedProcesses = allDetailsResults
-        .filter(detail => detail && detail.proceso_id) // Nos aseguramos que el detalle no sea nulo y tenga un ID
-        .map(detail => ({
-            ...detail,
-            id: detail.proceso_id, // Aseguramos que 'id' exista en el nivel superior
-            entidad: detail.cliente?.razon,
-        }));
-
-    console.log(`[Electron Backend] Obtenidos ${enrichedProcesses.length} detalles completos de procesos.`);
+    // Crear procesos para TODOS los IDs, incluso los que no tienen detalles completos
+    const allProcesses = processIds.map((id, index) => {
+      const detail = allDetailsResults[index];
+      
+      if (detail && detail.proceso_id) {
+        // Proceso con detalles completos
+        return {
+          ...detail,
+          id: detail.proceso_id,
+          proceso_id: detail.proceso_id,
+          entidad: detail.cliente?.razon,
+          hasDetails: true
+        };
+      } else {
+        // Proceso sin detalles (error 500 o similar), pero lo incluimos
+        return {
+          id: id,
+          proceso_id: id,
+          cliente: { razon: 'Datos no disponibles' },
+          entidad: 'Datos no disponibles',
+          deudor: { nombre: 'Datos no disponibles' },
+          hasDetails: false,
+          error: 'No se pudieron obtener los detalles desde la API'
+        };
+      }
+    });
+    
+    const processesWithDetails = allProcesses.filter(p => p.hasDetails).length;
+    console.log(`[Electron Backend] Obtenidos ${processesWithDetails} detalles completos de ${allProcesses.length} procesos totales.`);
 
     // Guardar los datos frescos en la base de datos
     try {
         const db = await getDBInstance();
-        const result = db.upsertProcesses(enrichedProcesses);
+        const result = db.upsertProcesses(allProcesses);
         
         if (result.success) {
           console.log(`[Electron Backend] ${result.count} procesos guardados en base de datos`);
@@ -177,7 +202,7 @@ ipcMain.handle('app:getProcesses', async () => {
     }
     
     isFetchingProcesses = false;
-    return { source: 'api', data: enrichedProcesses };
+    return { source: 'api', data: allProcesses };
 
   } catch (error) {
     // --- FALLBACK A DATOS LOCALES DESDE LA BASE DE DATOS ---

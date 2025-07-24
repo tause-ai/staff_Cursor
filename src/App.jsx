@@ -190,6 +190,17 @@ function App() {
 
   const handleDiligenciar = async () => {
     if (!selectedProcess) return;
+    
+    // Verificar si el proceso tiene detalles completos
+    if (selectedProcess.hasDetails === false) {
+      setSnackbar({
+        open: true,
+        message: 'No se puede diligenciar este proceso porque no tiene detalles completos desde la API.',
+        severity: 'error'
+      });
+      return;
+    }
+    
     setDiligenciando(true);
     setResultadoFinal(null);
     
@@ -287,6 +298,16 @@ function App() {
       });
       return;
     }
+    
+    // Verificar si el proceso tiene detalles completos
+    if (selectedProcess.hasDetails === false) {
+      setSnackbar({
+        open: true,
+        message: 'No se puede generar portada para este proceso porque no tiene detalles completos desde la API.',
+        severity: 'error'
+      });
+      return;
+    }
 
     setGenerandoPortada(true);
     
@@ -381,7 +402,8 @@ function App() {
       markProcessAsInProgress(process.proceso_id);
     }
     
-    if (process.cliente?.razon) {
+    // Solo cargar datos si el proceso tiene detalles completos
+    if (process.hasDetails !== false && process.cliente?.razon) {
       console.log('[React] Cargando datos para cliente:', process.cliente.razon);
       
       // Obtenemos tanto los campos requeridos como los datos ya mapeados para demanda
@@ -581,21 +603,40 @@ function App() {
       <Grid container spacing={3} sx={{ mt: 2 }}>
         {filteredProcesses.map((process) => {
           const status = getProcessStatus(process.proceso_id);
+          const hasDetails = process.hasDetails !== false; // Por defecto true para compatibilidad
+          
           return (
             <Grid item xs={12} md={6} lg={4} key={process.proceso_id}>
               <Card sx={{ 
-                border: status === 'completed' ? '2px solid #4caf50' : 'none'
+                border: status === 'completed' ? '2px solid #4caf50' : 
+                        !hasDetails ? '2px solid #ff9800' : 'none',
+                opacity: !hasDetails ? 0.8 : 1
               }}>
                 <CardContent>
-                  <Typography variant="h6" gutterBottom>
-                    Cliente: {process.cliente?.razon || 'No especificado'}
-                  </Typography>
+                  <Box sx={{ display: 'flex', alignItems: 'center', mb: 1 }}>
+                    <Typography variant="h6" sx={{ flexGrow: 1 }}>
+                      Cliente: {process.cliente?.razon || 'No especificado'}
+                    </Typography>
+                    {!hasDetails && (
+                      <Chip 
+                        label="Sin detalles"
+                        color="warning"
+                        size="small"
+                        icon={<ErrorIcon />}
+                      />
+                    )}
+                  </Box>
                   <Typography variant="body1" color="text.secondary">
                     Deudor: {process.deudor?.nombre || 'No especificado'}
                   </Typography>
                   <Typography variant="caption" color="text.secondary" sx={{ mt: 1, display: 'block' }}>
                     ID Proceso: {process.proceso_id}
                   </Typography>
+                  {!hasDetails && (
+                    <Typography variant="caption" color="warning.main" sx={{ mt: 1, display: 'block', fontStyle: 'italic' }}>
+                      ⚠️ Datos no disponibles desde la API
+                    </Typography>
+                  )}
                 </CardContent>
                 <CardActions sx={{ justifyContent: 'space-between', alignItems: 'center' }}>
                   <Chip 
@@ -606,11 +647,12 @@ function App() {
                   />
                   <Button 
                     size="small" 
-                    variant="contained"
+                    variant={hasDetails ? "contained" : "outlined"}
                     onClick={() => handleProcessSelect(process)}
-                    disabled={loading}
+                    disabled={loading || !hasDetails}
+                    color={hasDetails ? "primary" : "warning"}
                   >
-                    Ver Detalle
+                    {hasDetails ? 'Ver Detalle' : 'Sin datos'}
                   </Button>
                 </CardActions>
               </Card>

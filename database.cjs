@@ -13,13 +13,14 @@ class StaffBotDatabase {
   init() {
     try {
       // Crear el directorio de base de datos si no existe
-      const dbDir = path.join(app.getPath('userData'), '..', 'Electron');
+      const dbDir = app.getPath('userData');
       if (!fs.existsSync(dbDir)) {
         fs.mkdirSync(dbDir, { recursive: true });
       }
 
       // Crear conexión a la base de datos
       const dbPath = path.join(dbDir, 'staffbot.db');
+      console.log(`[Database] Intentando crear base de datos en: ${dbPath}`);
       this.db = new Database(dbPath);
       
       // Configurar la base de datos
@@ -31,9 +32,16 @@ class StaffBotDatabase {
       // Crear las tablas
       this.createTables();
       
-      console.log(`[Database] Base de datos inicializada en: ${dbPath}`);
+      console.log(`[Database] Base de datos inicializada exitosamente en: ${dbPath}`);
     } catch (error) {
       console.error('[Database] Error al inicializar la base de datos:', error);
+      console.error('[Database] Detalles del error:', {
+        message: error.message,
+        code: error.code,
+        errno: error.errno
+      });
+      // Asegurar que this.db quede como null si hay error
+      this.db = null;
     }
   }
 
@@ -126,56 +134,68 @@ class StaffBotDatabase {
 
   // Insertar o actualizar múltiples procesos (desde la API)
   upsertProcesses(processes) {
-    const stmt = this.db.prepare(`
-      INSERT OR REPLACE INTO procesos (
-        proceso_id, cliente_razon, cliente_nit, cliente_ciudad, cliente_direccion,
-        cliente_telefono, cliente_email, demandado_nombre, demandado_cedula,
-        demandado_ciudad, demandado_direccion, demandado_telefono, demandado_email,
-        pagare_numero, pagare_valor, pagare_valor_formateado, pagare_fecha_suscripcion,
-        pagare_fecha_vencimiento, pagare_fecha_mora, data_json
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `);
-
-    const transaction = this.db.transaction(() => {
-      for (const process of processes) {
-        stmt.run(
-          process.proceso_id,
-          process.cliente?.razon || null,
-          process.cliente?.nit || null,
-          process.cliente?.ciudad || null,
-          process.cliente?.direccion || null,
-          process.cliente?.telefono || null,
-          process.cliente?.email || null,
-          process.demandado?.nombre || null,
-          process.demandado?.cedula || null,
-          process.demandado?.ciudad || null,
-          process.demandado?.direccion || null,
-          process.demandado?.telefono || null,
-          process.demandado?.email || null,
-          process.pagare?.numero || null,
-          process.pagare?.valor || null,
-          process.pagare?.valor_formateado || null,
-          process.pagare?.fecha_suscripcion || null,
-          process.pagare?.fecha_vencimiento || null,
-          process.pagare?.fecha_mora || null,
-          JSON.stringify(process) // Almacenar JSON completo
-        );
-      }
-    });
-
     try {
+      // Verificar que la base de datos esté inicializada
+      if (!this.db) {
+        console.warn('[Database] Base de datos no inicializada para upsertProcesses');
+        return { success: false, error: 'Base de datos no inicializada', count: 0 };
+      }
+
+      const stmt = this.db.prepare(`
+        INSERT OR REPLACE INTO procesos (
+          proceso_id, cliente_razon, cliente_nit, cliente_ciudad, cliente_direccion,
+          cliente_telefono, cliente_email, demandado_nombre, demandado_cedula,
+          demandado_ciudad, demandado_direccion, demandado_telefono, demandado_email,
+          pagare_numero, pagare_valor, pagare_valor_formateado, pagare_fecha_suscripcion,
+          pagare_fecha_vencimiento, pagare_fecha_mora, data_json
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `);
+
+      const transaction = this.db.transaction(() => {
+        for (const process of processes) {
+          stmt.run(
+            process.proceso_id,
+            process.cliente?.razon || null,
+            process.cliente?.nit || null,
+            process.cliente?.ciudad || null,
+            process.cliente?.direccion || null,
+            process.cliente?.telefono || null,
+            process.cliente?.email || null,
+            process.demandado?.nombre || null,
+            process.demandado?.cedula || null,
+            process.demandado?.ciudad || null,
+            process.demandado?.direccion || null,
+            process.demandado?.telefono || null,
+            process.demandado?.email || null,
+            process.pagare?.numero || null,
+            process.pagare?.valor || null,
+            process.pagare?.valor_formateado || null,
+            process.pagare?.fecha_suscripcion || null,
+            process.pagare?.fecha_vencimiento || null,
+            process.pagare?.fecha_mora || null,
+            JSON.stringify(process) // Almacenar JSON completo
+          );
+        }
+      });
+
       transaction();
       console.log(`[Database] ${processes.length} procesos insertados/actualizados`);
       return { success: true, count: processes.length };
     } catch (error) {
       console.error('[Database] Error al insertar procesos:', error);
-      return { success: false, error: error.message };
+      return { success: false, error: error.message, count: 0 };
     }
   }
 
   // Obtener todos los procesos
   getAllProcesses() {
     try {
+      // Verificar que la base de datos esté inicializada
+      if (!this.db) {
+        console.warn('[Database] Base de datos no inicializada para getAllProcesses');
+        return [];
+      }
+
       const stmt = this.db.prepare(`
         SELECT data_json, created_at, updated_at
         FROM procesos 
@@ -380,6 +400,18 @@ class StaffBotDatabase {
   // Obtener estadísticas de la base de datos
   getStats() {
     try {
+      // Verificar que la base de datos esté inicializada
+      if (!this.db) {
+        console.warn('[Database] Base de datos no inicializada para getStats');
+        return {
+          procesos: 0,
+          mappedData: 0,
+          documentCache: 0,
+          dbSizeBytes: 0,
+          dbSizeMB: 0
+        };
+      }
+
       const procesosCount = this.db.prepare('SELECT COUNT(*) as count FROM procesos').get().count;
       const mappedDataCount = this.db.prepare('SELECT COUNT(*) as count FROM mapped_data').get().count;
       const documentCacheCount = this.db.prepare('SELECT COUNT(*) as count FROM document_cache').get().count;
@@ -395,7 +427,13 @@ class StaffBotDatabase {
       };
     } catch (error) {
       console.error('[Database] Error al obtener estadísticas:', error);
-      return null;
+      return {
+        procesos: 0,
+        mappedData: 0,
+        documentCache: 0,
+        dbSizeBytes: 0,
+        dbSizeMB: 0
+      };
     }
   }
 
@@ -434,6 +472,11 @@ let dbInstance = null;
 function getDatabase() {
   if (!dbInstance) {
     dbInstance = new StaffBotDatabase();
+    // Si la inicialización falló, intentar una vez más
+    if (!dbInstance.db) {
+      console.warn('[Database] Primera inicialización falló, reintentando...');
+      dbInstance = new StaffBotDatabase();
+    }
   }
   return dbInstance;
 }
@@ -441,4 +484,4 @@ function getDatabase() {
 module.exports = {
   getDatabase,
   StaffBotDatabase
-}; 
+};
