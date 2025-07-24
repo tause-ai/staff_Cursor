@@ -94,6 +94,10 @@ function App() {
   // Estados para el editor de campos
   const [fieldEditorOpen, setFieldEditorOpen] = useState(false);
   const [currentMappedData, setCurrentMappedData] = useState(null);
+  
+  // Estados para el editor de campos de portada
+  const [coverFieldEditorOpen, setCoverFieldEditorOpen] = useState(false);
+  const [currentCoverMappedData, setCurrentCoverMappedData] = useState(null);
 
   useEffect(() => {
     const loadProcesses = async () => {
@@ -253,7 +257,7 @@ function App() {
         
         setSnackbar({ 
           open: true, 
-          message: 'Campos guardados exitosamente ✅', 
+          message: 'Campos de demanda guardados exitosamente ✅', 
           severity: 'success' 
         });
         
@@ -385,6 +389,62 @@ function App() {
 
   const handleCoverMappedDataChange = (e) => {
     setCoverMappedData(prev => ({ ...prev, [e.target.name]: e.target.value }));
+  };
+
+  // Función para abrir el editor de campos de portada
+  const handleOpenCoverFieldEditor = () => {
+    setCurrentCoverMappedData(coverMappedData);
+    setCoverFieldEditorOpen(true);
+  };
+
+  // Función para guardar los campos editados de portada
+  const handleSaveCoverEditedFields = async (editedData) => {
+    console.log('[handleSaveCoverEditedFields] Iniciando guardado de campos de portada para proceso:', selectedProcess.proceso_id);
+    console.log('[handleSaveCoverEditedFields] Datos a guardar:', editedData);
+    
+    try {
+      // Paso 1: Guardar en backend (usando la misma función pero con prefijo para diferenciar)
+      const prefixedData = {};
+      Object.keys(editedData).forEach(key => {
+        prefixedData[`COVER_${key}`] = editedData[key];
+      });
+      
+      console.log('[handleSaveCoverEditedFields] Llamando updateMappedData...');
+      const result = await window.electronAPI.app.updateMappedData(
+        selectedProcess.proceso_id, 
+        prefixedData
+      );
+      
+      console.log('[handleSaveCoverEditedFields] Respuesta del backend:', result);
+      
+      if (result.success) {
+        // Paso 2: Actualizar estados locales
+        console.log('[handleSaveCoverEditedFields] Actualizando estados locales...');
+        setCurrentCoverMappedData(editedData);
+        setCoverMappedData(editedData);
+        
+        setSnackbar({ 
+          open: true, 
+          message: 'Campos de portada guardados exitosamente ✅', 
+          severity: 'success' 
+        });
+        
+        setCoverFieldEditorOpen(false);
+      } else {
+        setSnackbar({ 
+          open: true, 
+          message: `Error al guardar campos de portada: ${result.error}`, 
+          severity: 'error' 
+        });
+      }
+    } catch (error) {
+      console.error('[handleSaveCoverEditedFields] Error:', error);
+      setSnackbar({ 
+        open: true, 
+        message: `Error al guardar campos de portada: ${error.message}`, 
+        severity: 'error' 
+      });
+    }
   };
 
   const handleProcessSelect = async (process) => {
@@ -769,25 +829,38 @@ function App() {
               </Typography>
               
               {coverMappedData ? (
-               <Grid container spacing={2}>
-                  {coverTemplateFields.map((field) => (
-                    <Grid item xs={12} sm={6} md={4} key={field}>
-                     <TextField
-                        fullWidth
-                        variant="outlined"
-                        label={field}
-                        name={field}
-                        value={coverMappedData[field] || ''}
-                        onChange={handleCoverMappedDataChange}
-                        sx={{
-                          '& .MuiOutlinedInput-root': {
-                            backgroundColor: 'rgba(76, 175, 80, 0.04)', // Verde claro para diferenciarlo de demanda
-                          }
-                        }}
-                     />
-                   </Grid>
-                  ))}
-               </Grid>
+                <>
+                  <Box sx={{ mb: 2, display: 'flex', justifyContent: 'flex-end' }}>
+                    <Button
+                      variant="outlined"
+                      color="secondary"
+                      onClick={handleOpenCoverFieldEditor}
+                      startIcon={<Edit />}
+                      size="small"
+                    >
+                      Editar Campos
+                    </Button>
+                  </Box>
+                  <Grid container spacing={2}>
+                    {coverTemplateFields.map((field) => (
+                      <Grid item xs={12} sm={6} md={4} key={field}>
+                       <TextField
+                          fullWidth
+                          variant="outlined"
+                          label={field}
+                          name={field}
+                          value={coverMappedData[field] || ''}
+                          onChange={handleCoverMappedDataChange}
+                          sx={{
+                            '& .MuiOutlinedInput-root': {
+                              backgroundColor: 'rgba(76, 175, 80, 0.04)', // Verde claro para diferenciarlo de demanda
+                            }
+                          }}
+                       />
+                     </Grid>
+                    ))}
+                 </Grid>
+                </>
               ) : (
                 <Typography variant="body2" color="text.secondary">
                   Cargando datos de portada del proceso...
@@ -1455,14 +1528,23 @@ function App() {
         </Container>
       </Box>
 
-      {/* Editor de Campos */}
-      <FieldEditor
-        open={fieldEditorOpen}
-        onClose={() => setFieldEditorOpen(false)}
-        mappedData={currentMappedData}
-        onSave={handleSaveEditedFields}
-        processId={selectedProcess?.proceso_id}
-      />
+      {/* Editor de campos de demanda */}
+        <FieldEditor
+          open={fieldEditorOpen}
+          onClose={() => setFieldEditorOpen(false)}
+          mappedData={currentMappedData}
+          onSave={handleSaveEditedFields}
+          processId={selectedProcess?.proceso_id}
+        />
+        
+        {/* Editor de campos de portada */}
+        <FieldEditor
+          open={coverFieldEditorOpen}
+          onClose={() => setCoverFieldEditorOpen(false)}
+          mappedData={currentCoverMappedData}
+          onSave={handleSaveCoverEditedFields}
+          processId={selectedProcess?.proceso_id}
+        />
 
       <Snackbar
         open={snackbar.open}
