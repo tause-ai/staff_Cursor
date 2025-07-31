@@ -172,8 +172,12 @@ function App() {
 
   // Actualizar el contenido del editor cuando cambie el resultado
   useEffect(() => {
+    console.log('[useEffect] resultadoFinal cambió:', resultadoFinal);
     if (resultadoFinal && resultadoFinal.htmlContent) {
+      console.log('[useEffect] Actualizando editorContent con nuevo HTML');
       setEditorContent(resultadoFinal.htmlContent);
+    } else {
+      console.log('[useEffect] No hay htmlContent en resultadoFinal');
     }
   }, [resultadoFinal]);
 
@@ -255,24 +259,38 @@ function App() {
         setCurrentMappedData(editedData);
         setMappedData(editedData);
         
-        setSnackbar({ 
-          open: true, 
-          message: 'Campos de demanda guardados exitosamente ✅', 
-          severity: 'success' 
-        });
-        
-        // Paso 3: Regenerar documento (opcional, en segundo plano)
+        // Paso 3: Regenerar documento automáticamente
         console.log('[handleSaveEditedFields] Iniciando regeneración del documento...');
         try {
-          await handleRegenerateDocument();
+          setDiligenciando(true);
+          const resultado = await window.electronAPI.app.diligenciarDemanda(selectedProcess);
+          console.log('[handleSaveEditedFields] Resultado de diligenciarDemanda:', resultado);
+          setResultadoFinal(resultado);
+          if (resultado && resultado.htmlContent) {
+            console.log('[handleSaveEditedFields] Actualizando editorContent directamente');
+            setEditorContent(resultado.htmlContent);
+          } else {
+            console.log('[handleSaveEditedFields] No hay htmlContent en resultado:', resultado);
+          }
           console.log('[handleSaveEditedFields] Documento regenerado exitosamente');
+          
+          setSnackbar({ 
+            open: true, 
+            message: 'Campos guardados y documento regenerado exitosamente ✅', 
+            severity: 'success' 
+          });
+          
+          // Cerrar el editor de campos
+          setFieldEditorOpen(false);
         } catch (regenError) {
-          console.error('[handleSaveEditedFields] Error en regeneración (no crítico):', regenError);
+          console.error('[handleSaveEditedFields] Error en regeneración:', regenError);
           setSnackbar({ 
             open: true, 
             message: 'Campos guardados ✅ pero error al regenerar documento. Usa el botón "Regenerar" manualmente.', 
             severity: 'warning' 
           });
+        } finally {
+          setDiligenciando(false);
         }
         
       } else {
@@ -388,7 +406,9 @@ function App() {
   };
 
   const handleCoverMappedDataChange = (e) => {
-    setCoverMappedData(prev => ({ ...prev, [e.target.name]: e.target.value }));
+    // Usar el nombre del campo tal como viene (ya tiene prefijo COVER_ si es necesario)
+    const fieldName = e.target.name.startsWith('COVER_') ? e.target.name : `COVER_${e.target.name}`;
+    setCoverMappedData(prev => ({ ...prev, [fieldName]: e.target.value }));
   };
 
   // Función para abrir el editor de campos de portada
@@ -403,21 +423,19 @@ function App() {
     console.log('[handleSaveCoverEditedFields] Datos a guardar:', editedData);
     
     try {
-      // Paso 1: Guardar en backend (usando la misma función pero con prefijo para diferenciar)
-      const prefixedData = {};
-      Object.keys(editedData).forEach(key => {
-        prefixedData[`COVER_${key}`] = editedData[key];
-      });
+      // Paso 1: Guardar en backend
+      // Los datos ya vienen con prefijo COVER_ desde getProcessCoverMappedData
+      const dataToSave = editedData;
       
       console.log('[handleSaveCoverEditedFields] Llamando updateMappedData...');
-      const result = await window.electronAPI.app.updateMappedData(
-        selectedProcess.proceso_id, 
-        prefixedData
-      );
+        const updateResult = await window.electronAPI.app.updateMappedData(
+          selectedProcess.id,
+          dataToSave
+        );
       
-      console.log('[handleSaveCoverEditedFields] Respuesta del backend:', result);
+      console.log('[handleSaveCoverEditedFields] Respuesta del backend:', updateResult);
       
-      if (result.success) {
+      if (updateResult.success) {
         // Paso 2: Actualizar estados locales
         console.log('[handleSaveCoverEditedFields] Actualizando estados locales...');
         setCurrentCoverMappedData(editedData);
@@ -433,7 +451,7 @@ function App() {
       } else {
         setSnackbar({ 
           open: true, 
-          message: `Error al guardar campos de portada: ${result.error}`, 
+          message: `Error al guardar campos de portada: ${updateResult.error}`, 
           severity: 'error' 
         });
       }
@@ -494,13 +512,13 @@ function App() {
         console.log('[React] Forzando campos básicos de portada:', basicCoverFields);
         setCoverTemplateFields(basicCoverFields);
         
-        // Crear datos básicos de portada
+        // Crear datos básicos de portada con prefijo COVER_
         const basicCoverData = {
-          'JUZGADO': data.JUZGADO || 'Juzgado Civil Municipal',
-          'DOMICILIO': data.DOMICILIO || 'Bogotá D.C.',
-          'CUANTIA': data.CUANTIA || 'MÍNIMA',
-          'DEMANDADO_1': data.DEMANDADO_1 || data.DEMANDADO || '',
-          'DEMANDADO_2': data.DEMANDADO_2 || ''
+          'COVER_JUZGADO': data.JUZGADO || 'Juzgado Civil Municipal',
+          'COVER_DOMICILIO': data.DOMICILIO || 'Bogotá D.C.',
+          'COVER_CUANTIA': data.CUANTIA || 'MÍNIMA',
+          'COVER_DEMANDADO_1': data.DEMANDADO_1 || data.DEMANDADO || '',
+          'COVER_DEMANDADO_2': data.DEMANDADO_2 || ''
         };
         setCoverMappedData(basicCoverData);
       }
@@ -848,8 +866,8 @@ function App() {
                           fullWidth
                           variant="outlined"
                           label={field}
-                          name={field}
-                          value={coverMappedData[field] || ''}
+                          name={field.startsWith('COVER_') ? field : `COVER_${field}`}
+                          value={coverMappedData[field.startsWith('COVER_') ? field : `COVER_${field}`] || ''}
                           onChange={handleCoverMappedDataChange}
                           sx={{
                             '& .MuiOutlinedInput-root': {
@@ -1034,9 +1052,21 @@ function App() {
             // Guardar los cambios al backend
             try {
               await window.electronAPI.app.updateMappedData(selectedProcess.proceso_id, mappedData);
+              
+              // Regenerar el documento automáticamente con los nuevos datos
+              try {
+                const resultado = await window.electronAPI.app.diligenciarDemanda(selectedProcess);
+                if (resultado.success && resultado.htmlContent) {
+                  setEditorContent(resultado.htmlContent);
+                  setResultadoFinal(resultado);
+                }
+              } catch (regenError) {
+                console.error('Error al regenerar documento:', regenError);
+              }
+              
               setSnackbar({
                 open: true,
-                message: `Campo ${fieldName} actualizado y guardado: "${newValue}"`,
+                message: `Campo ${fieldName} actualizado y documento regenerado: "${newValue}"`,
                 severity: 'success'
               });
             } catch (error) {

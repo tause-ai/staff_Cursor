@@ -21,6 +21,12 @@ class StaffBotDatabase {
       // Crear conexión a la base de datos
       const dbPath = path.join(dbDir, 'staffbot.db');
       console.log(`[Database] Intentando crear base de datos en: ${dbPath}`);
+      
+      // Verificar que better-sqlite3 esté disponible
+      if (typeof Database !== 'function') {
+        throw new Error('better-sqlite3 no está disponible');
+      }
+      
       this.db = new Database(dbPath);
       
       // Configurar la base de datos
@@ -40,6 +46,13 @@ class StaffBotDatabase {
         code: error.code,
         errno: error.errno
       });
+      
+      // Intentar una solución alternativa si es un error de compilación
+      if (error.code === 'ERR_DLOPEN_FAILED' || error.message.includes('mach-o file')) {
+        console.warn('[Database] Error de compilación detectado. Intentando reinstalar better-sqlite3...');
+        // Aquí podríamos sugerir reinstalar, pero por ahora solo marcamos como no disponible
+      }
+      
       // Asegurar que this.db quede como null si hay error
       this.db = null;
     }
@@ -196,6 +209,17 @@ class StaffBotDatabase {
         return [];
       }
 
+      // Verificar que la tabla existe
+      const tableExists = this.db.prepare(`
+        SELECT name FROM sqlite_master 
+        WHERE type='table' AND name='procesos'
+      `).get();
+      
+      if (!tableExists) {
+        console.warn('[Database] Tabla procesos no existe');
+        return [];
+      }
+
       const stmt = this.db.prepare(`
         SELECT data_json, created_at, updated_at
         FROM procesos 
@@ -203,13 +227,20 @@ class StaffBotDatabase {
       `);
       
       const rows = stmt.all();
-      const processes = rows.map(row => ({
-        ...JSON.parse(row.data_json),
-        _db_created_at: row.created_at,
-        _db_updated_at: row.updated_at
-      }));
+      const processes = rows.map(row => {
+        try {
+          return {
+            ...JSON.parse(row.data_json),
+            _db_created_at: row.created_at,
+            _db_updated_at: row.updated_at
+          };
+        } catch (parseError) {
+          console.error('[Database] Error al parsear JSON de proceso:', parseError);
+          return null;
+        }
+      }).filter(Boolean); // Filtrar procesos con errores de parsing
       
-      console.log(`[Database] Obtenidos ${processes.length} procesos`);
+      console.log(`[Database] Obtenidos ${processes.length} procesos válidos`);
       return processes;
     } catch (error) {
       console.error('[Database] Error al obtener procesos:', error);
@@ -285,18 +316,24 @@ class StaffBotDatabase {
 
   // Guardar datos de campos editados
   updateMappedData(proceso_id, mappedData) {
-    const insertStmt = this.db.prepare(`
-      INSERT OR REPLACE INTO mapped_data (proceso_id, field_name, field_value)
-      VALUES (?, ?, ?)
-    `);
-
-    const transaction = this.db.transaction(() => {
-      for (const [fieldName, fieldValue] of Object.entries(mappedData)) {
-        insertStmt.run(proceso_id, fieldName, fieldValue);
-      }
-    });
-
     try {
+      // Verificar que la base de datos esté inicializada
+      if (!this.db) {
+        console.error('[Database] Base de datos no inicializada para updateMappedData');
+        return { success: false, error: 'Base de datos no inicializada' };
+      }
+
+      const insertStmt = this.db.prepare(`
+        INSERT OR REPLACE INTO mapped_data (proceso_id, field_name, field_value)
+        VALUES (?, ?, ?)
+      `);
+
+      const transaction = this.db.transaction(() => {
+        for (const [fieldName, fieldValue] of Object.entries(mappedData)) {
+          insertStmt.run(proceso_id, fieldName, fieldValue);
+        }
+      });
+
       transaction();
       console.log(`[Database] Datos mapeados actualizados para proceso ${proceso_id}`);
       return { success: true };

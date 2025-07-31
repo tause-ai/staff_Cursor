@@ -63,6 +63,11 @@ const FieldEditor = ({ open, onClose, mappedData, onSave, processId }) => {
 
   // Agrupar campos por categorías para mejor organización
   const getFieldCategory = (fieldName) => {
+    // Campos de portada tienen su propia categoría
+    if (fieldName.startsWith('COVER_')) {
+      return 'Campos de Portada';
+    }
+    
     if (fieldName.includes('JUZGADO') || fieldName.includes('DOMICILIO') || fieldName.includes('CUANTIA')) {
       return 'Información del Juzgado';
     }
@@ -109,8 +114,21 @@ const FieldEditor = ({ open, onClose, mappedData, onSave, processId }) => {
       'DIRECCION_NOTIFICACION': 'Dirección Notificación Principal',
       'DIRECCION_NOTIFICACION_2': 'Dirección Notificación 2',
       'CORREO': 'Correo Principal',
-      'CORREO_2': 'Correo 2'
+      'CORREO_2': 'Correo 2',
+      // Campos de portada con prefijo COVER_
+      'COVER_JUZGADO': 'Juzgado (Portada)',
+      'COVER_DOMICILIO': 'Domicilio (Portada)',
+      'COVER_CUANTIA': 'Cuantía (Portada)',
+      'COVER_DEMANDADO_1': 'Demandado Principal (Portada)',
+      'COVER_DEMANDADO_2': 'Demandado Secundario (Portada)'
     };
+    
+    // Si es un campo de portada sin etiqueta específica, remover el prefijo COVER_ para mostrar
+    if (fieldName.startsWith('COVER_') && !labels[fieldName]) {
+      const baseField = fieldName.replace('COVER_', '');
+      return `${baseField.replace(/_/g, ' ')} (Portada)`;
+    }
+    
     return labels[fieldName] || fieldName.replace(/_/g, ' ');
   };
 
@@ -211,4 +229,4 @@ const FieldEditor = ({ open, onClose, mappedData, onSave, processId }) => {
   );
 };
 
-export default FieldEditor; 
+export default FieldEditor;

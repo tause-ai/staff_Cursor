@@ -25,7 +25,7 @@ function createWindow() {
       nodeIntegration: false,
       contextIsolation: true,
       enableRemoteModule: false,
-      preload: path.join(__dirname, 'preload.js') // Ruta corregida al preload
+      preload: path.join(__dirname, 'src/preload.js') // Ruta corregida al preload
     },
     // icon: path.join(__dirname, 'assets/icon.png'), // Opcional
     titleBarStyle: 'default',
@@ -88,8 +88,14 @@ async function getDBInstance() {
       return db; // Devolver la instancia aunque no esté inicializada
     }
     
-    const stats = db.getStats();
-    console.log(`[Electron Backend] Base de datos SQLite - Procesos: ${stats.procesos}, Datos editados: ${stats.mappedData}`);
+    // Verificar que la base de datos esté funcionando correctamente
+    try {
+      const stats = db.getStats();
+      console.log(`[Electron Backend] Base de datos SQLite - Procesos: ${stats.procesos}, Datos editados: ${stats.mappedData}`);
+    } catch (statsError) {
+      console.warn('[Electron Backend] Error al obtener estadísticas de BD:', statsError.message);
+      // No fallamos aquí, solo registramos el warning
+    }
     
     return db;
   } catch (error) {
@@ -190,12 +196,18 @@ ipcMain.handle('app:getProcesses', async () => {
     // Guardar los datos frescos en la base de datos
     try {
         const db = await getDBInstance();
-        const result = db.upsertProcesses(allProcesses);
         
-        if (result.success) {
-          console.log(`[Electron Backend] ${result.count} procesos guardados en base de datos`);
+        // Verificar que la base de datos esté disponible antes de intentar escribir
+        if (!db || !db.db) {
+          console.warn('[Electron Backend] Base de datos no disponible, saltando guardado local');
         } else {
-          console.error(`[Electron Backend] Error al guardar en base de datos: ${result.error}`);
+          const result = db.upsertProcesses(allProcesses);
+          
+          if (result.success) {
+            console.log(`[Electron Backend] ${result.count} procesos guardados en base de datos`);
+          } else {
+            console.error(`[Electron Backend] Error al guardar en base de datos: ${result.error}`);
+          }
         }
     } catch (writeError) {
         console.error(`[Electron Backend] Error al escribir en base de datos: ${writeError.message}`);
@@ -583,6 +595,24 @@ ipcMain.handle('app:getCoverTemplateFields', async (event, clientName) => {
 async function getProcessMappedData(process, templateFields = []) {
   console.log('[getProcessMappedData] Iniciando mapeo para el proceso:', process.proceso_id);
   
+  // 1. Verificar si hay datos editados en la base de datos PRIMERO
+  console.log('[getProcessMappedData] Verificando datos editados en base de datos...');
+  let mappedData = {};
+  
+  try {
+    const db = await getDBInstance();
+    const editedData = db.getMappedData(process.proceso_id);
+    
+    if (editedData && Object.keys(editedData).length > 0) {
+      console.log('[getProcessMappedData] Se encontraron datos editados, combinando con datos frescos...');
+      mappedData = { ...editedData }; // Usar datos editados como base
+    } else {
+      console.log('[getProcessMappedData] No se encontraron datos editados, obteniendo datos frescos...');
+    }
+  } catch (error) {
+    console.warn('[getProcessMappedData] Error al obtener datos editados:', error.message);
+  }
+  
   // DEBUG: Mostrar estructura completa de datos recibidos
   console.log('[getProcessMappedData] DEBUG - Estructura completa del proceso:');
   console.log('[getProcessMappedData] - Cliente:', JSON.stringify(process.cliente, null, 2));
@@ -592,13 +622,14 @@ async function getProcessMappedData(process, templateFields = []) {
   console.log('[getProcessMappedData] - Pagarés:', JSON.stringify(process.documentos?.pagares, null, 2));
   console.log('[getProcessMappedData] - Campos directos del proceso:', Object.keys(process).filter(k => !['documentos', 'cliente', 'deudor', 'codeudores', 'abogados'].includes(k)));
   
-  const mappedData = {};
+  // Crear objeto temporal para datos frescos
+  const freshMappedData = {};
   
-  // 1. Mapeo de campos generales desde la API REAL
-  if (process.cliente?.razon) mappedData['CLIENTE'] = process.cliente.razon;
+  // 2. Mapeo de campos generales desde la API REAL (datos frescos)
+  if (process.cliente?.razon) freshMappedData['CLIENTE'] = process.cliente.razon;
   if (process.deudor?.nombre) {
     // Agregar CC y número de cédula al nombre del deudor
-    mappedData['DEMANDADO_1'] = formatearNombreConCC(process.deudor.nombre, process.deudor.identificacion);
+    freshMappedData['DEMANDADO_1'] = formatearNombreConCC(process.deudor.nombre, process.deudor.identificacion);
   }
   
   // Obtener codeudores del array de codeudores o del primer pagaré con codeudor
@@ -606,7 +637,7 @@ async function getProcessMappedData(process, templateFields = []) {
     process.codeudores.forEach((codeudor, index) => {
       if (codeudor?.nombre) {
         // Agregar CC y número de cédula al nombre del codeudor
-        mappedData[`DEMANDADO_${index + 2}`] = formatearNombreConCC(codeudor.nombre, codeudor.identificacion);
+        freshMappedData[`DEMANDADO_${index + 2}`] = formatearNombreConCC(codeudor.nombre, codeudor.identificacion);
       }
     });
   }
@@ -661,20 +692,20 @@ async function getProcessMappedData(process, templateFields = []) {
   if (datosPagares.length > 0) {
     // Mapear campos base usando datos del PRIMER pagaré
     const primerPagare = datosPagares[0];
-    if (primerPagare.numeroPagare) mappedData['PAGARE'] = primerPagare.numeroPagare;
-    if (primerPagare.valorFormateado) mappedData['CAPITAL'] = primerPagare.valorFormateado;
-    if (primerPagare.fechaSuscripcion) mappedData['SUSCRIPCION'] = primerPagare.fechaSuscripcion;
-    if (primerPagare.fechaVencimiento) mappedData['VENCIMIENTO'] = primerPagare.fechaVencimiento;
-    if (primerPagare.fechaMora) mappedData['INTERES_MORA'] = primerPagare.fechaMora;
+    if (primerPagare.numeroPagare) freshMappedData['PAGARE'] = primerPagare.numeroPagare;
+    if (primerPagare.valorFormateado) freshMappedData['CAPITAL'] = primerPagare.valorFormateado;
+    if (primerPagare.fechaSuscripcion) freshMappedData['SUSCRIPCION'] = primerPagare.fechaSuscripcion;
+    if (primerPagare.fechaVencimiento) freshMappedData['VENCIMIENTO'] = primerPagare.fechaVencimiento;
+    if (primerPagare.fechaMora) freshMappedData['INTERES_MORA'] = primerPagare.fechaMora;
     
     // Mapear campos numerados para CADA pagaré
     datosPagares.forEach((datos, index) => {
       const suffix = index + 1;
-      if (datos.numeroPagare) mappedData[`PAGARE_${suffix}`] = datos.numeroPagare;
-      if (datos.valorFormateado) mappedData[`CAPITAL_${suffix}`] = datos.valorFormateado;
-      if (datos.fechaSuscripcion) mappedData[`SUSCRIPCION_${suffix}`] = datos.fechaSuscripcion;
-      if (datos.fechaVencimiento) mappedData[`VENCIMIENTO_${suffix}`] = datos.fechaVencimiento;
-      if (datos.fechaMora) mappedData[`INTERES_MORA_${suffix}`] = datos.fechaMora;
+      if (datos.numeroPagare) freshMappedData[`PAGARE_${suffix}`] = datos.numeroPagare;
+      if (datos.valorFormateado) freshMappedData[`CAPITAL_${suffix}`] = datos.valorFormateado;
+      if (datos.fechaSuscripcion) freshMappedData[`SUSCRIPCION_${suffix}`] = datos.fechaSuscripcion;
+      if (datos.fechaVencimiento) freshMappedData[`VENCIMIENTO_${suffix}`] = datos.fechaVencimiento;
+      if (datos.fechaMora) freshMappedData[`INTERES_MORA_${suffix}`] = datos.fechaMora;
     });
     
     // Calcular TOTAL sumando todos los valores
@@ -683,8 +714,8 @@ async function getProcessMappedData(process, templateFields = []) {
     }, 0);
     
     if (totalValor > 0) {
-      mappedData['TOTAL'] = formatearValorCompleto(totalValor);
-      console.log('[getProcessMappedData] TOTAL calculado para', datosPagares.length, 'pagarés:', mappedData['TOTAL']);
+      freshMappedData['TOTAL'] = formatearValorCompleto(totalValor);
+      console.log('[getProcessMappedData] TOTAL calculado para', datosPagares.length, 'pagarés:', freshMappedData['TOTAL']);
     }
     
     console.log('[getProcessMappedData] Campos de todos los pagarés mapeados desde PDFs');
@@ -715,21 +746,21 @@ async function getProcessMappedData(process, templateFields = []) {
     
     // Campos base (primer pagaré)
     const primerPagare = pagares[0];
-    if (primerPagare.numero) mappedData['PAGARE'] = primerPagare.numero;
-    if (primerPagare.valor_formateado) mappedData['CAPITAL'] = primerPagare.valor_formateado;
-    if (primerPagare.fecha_suscripcion) mappedData['SUSCRIPCION'] = primerPagare.fecha_suscripcion;
-    if (primerPagare.fecha_vencimiento) mappedData['VENCIMIENTO'] = primerPagare.fecha_vencimiento;
-    if (primerPagare.interes_mora) mappedData['INTERES_MORA'] = primerPagare.interes_mora;
+    if (primerPagare.numero) freshMappedData['PAGARE'] = primerPagare.numero;
+    if (primerPagare.valor_formateado) freshMappedData['CAPITAL'] = primerPagare.valor_formateado;
+    if (primerPagare.fecha_suscripcion) freshMappedData['SUSCRIPCION'] = primerPagare.fecha_suscripcion;
+    if (primerPagare.fecha_vencimiento) freshMappedData['VENCIMIENTO'] = primerPagare.fecha_vencimiento;
+    if (primerPagare.interes_mora) freshMappedData['INTERES_MORA'] = primerPagare.interes_mora;
     
     // Campos numerados para cada pagaré
     pagares.forEach((pagare, index) => {
       const suffix = index + 1;
-      if (pagare.numero) mappedData[`PAGARE_${suffix}`] = pagare.numero;
-      if (pagare.valor_formateado) mappedData[`CAPITAL_${suffix}`] = pagare.valor_formateado;
-      if (pagare.fecha_suscripcion) mappedData[`SUSCRIPCION_${suffix}`] = pagare.fecha_suscripcion;
-      if (pagare.fecha_vencimiento) mappedData[`VENCIMIENTO_${suffix}`] = pagare.fecha_vencimiento;
-      if (pagare.interes_mora) mappedData[`INTERES_MORA_${suffix}`] = pagare.interes_mora;
-      if (pagare.codeudor_completo) mappedData[`CODEUDOR_${suffix}`] = pagare.codeudor_completo;
+      if (pagare.numero) freshMappedData[`PAGARE_${suffix}`] = pagare.numero;
+      if (pagare.valor_formateado) freshMappedData[`CAPITAL_${suffix}`] = pagare.valor_formateado;
+      if (pagare.fecha_suscripcion) freshMappedData[`SUSCRIPCION_${suffix}`] = pagare.fecha_suscripcion;
+      if (pagare.fecha_vencimiento) freshMappedData[`VENCIMIENTO_${suffix}`] = pagare.fecha_vencimiento;
+      if (pagare.interes_mora) freshMappedData[`INTERES_MORA_${suffix}`] = pagare.interes_mora;
+      if (pagare.codeudor_completo) freshMappedData[`CODEUDOR_${suffix}`] = pagare.codeudor_completo;
     });
     
     // Calcular TOTAL sumando los valores de todos los pagarés (solo números)
@@ -744,19 +775,24 @@ async function getProcessMappedData(process, templateFields = []) {
     }, 0);
     
     if (totalValor > 0) {
-      mappedData['TOTAL'] = formatearValorCompleto(totalValor);
+      freshMappedData['TOTAL'] = formatearValorCompleto(totalValor);
     }
   }
   
   // 3. Campos básicos de demanda (con valores por defecto como en portadas)
-  mappedData['JUZGADO'] = process.juzgado_origen || process.juzgado || 'Juzgado Civil Municipal';
-  mappedData['DOMICILIO'] = process.deudor?.ciudad || process.ciudad || process.cliente?.ciudad || 'Bogotá D.C.';
-  mappedData['CUANTIA'] = process.cuantia || 'MÍNIMA';
+  freshMappedData['JUZGADO'] = process.juzgado_origen || process.juzgado || 'Juzgado Civil Municipal';
+  freshMappedData['DOMICILIO'] = process.deudor?.ciudad || process.ciudad || process.cliente?.ciudad || 'Bogotá D.C.';
+  freshMappedData['CUANTIA'] = process.cuantia || 'MÍNIMA';
   
-  console.log('[getProcessMappedData] Mapeo completado. Total campos:', Object.keys(mappedData).length);
-  console.log('[getProcessMappedData] Campos mapeados:', mappedData);
+  // 4. Combinar datos editados con datos frescos (los editados tienen prioridad)
+  const finalMappedData = { ...freshMappedData, ...mappedData };
   
-  return mappedData;
+  console.log('[getProcessMappedData] Mapeo completado. Total campos:', Object.keys(finalMappedData).length);
+  console.log('[getProcessMappedData] Campos frescos:', Object.keys(freshMappedData).length);
+  console.log('[getProcessMappedData] Campos editados:', Object.keys(mappedData).length);
+  console.log('[getProcessMappedData] Campos finales:', finalMappedData);
+  
+  return finalMappedData;
 }
 // --- FIN RESTAURACIÓN LÓGICA FUNCIONAL DE MAPEOS ---
 
@@ -1062,6 +1098,7 @@ async function getProcessCoverMappedData(process) {
     };
 
     // 5. Filtrar solo los campos que requiere la plantilla de portada específica
+    // Los campos en las plantillas Word NO tienen prefijo COVER_
     const coverMappedData = {};
     coverFields.forEach(field => {
       if (allPossibleCoverMappings.hasOwnProperty(field)) {
@@ -1106,8 +1143,25 @@ ipcMain.handle('app:diligenciarPortada', async (event, proceso) => {
     
     let mappedData;
     if (Object.keys(cachedData).length > 0) {
-      console.log('[diligenciarPortada] Usando datos editados de la base de datos');
-      mappedData = cachedData;
+      console.log('[diligenciarPortada] Datos encontrados en base de datos:', Object.keys(cachedData));
+      
+      // Filtrar solo los campos de portada (con prefijo COVER_) y REMOVER el prefijo
+      const coverData = {};
+      Object.keys(cachedData).forEach(key => {
+        if (key.startsWith('COVER_')) {
+          // REMOVER el prefijo COVER_ porque las plantillas Word NO lo esperan
+          const fieldName = key.replace('COVER_', '');
+          coverData[fieldName] = cachedData[key];
+        }
+      });
+      
+      if (Object.keys(coverData).length > 0) {
+        console.log('[diligenciarPortada] Usando datos editados de portada de la base de datos:', Object.keys(coverData));
+        mappedData = coverData;
+      } else {
+        console.log('[diligenciarPortada] No se encontraron datos de portada editados, obteniendo datos frescos...');
+        mappedData = await getProcessCoverMappedData(proceso);
+      }
     } else {
       console.log('[diligenciarPortada] Obteniendo datos mapeados frescos de portada...');
       mappedData = await getProcessCoverMappedData(proceso);
@@ -1973,9 +2027,12 @@ async function extraerDatosPagare(pdfBase64) {
     
     // Patrón 1: Cerca de "Fecha de suscripción" con flexibilidad en espacios y texto
     const patronesSuscripcion = [
-      /(?:Fecha\s*de\s*suscripción|suscripción)[\s:]*([0-9]{2}\/[0-9]{2}\/[0-9]{4})/i,
-      /suscripción[\s\S]{0,50}([0-9]{2}\/[0-9]{2}\/[0-9]{4})/i,
-      /(?:firmad[oa]|suscrit[oa])[\s\S]{0,30}([0-9]{2}\/[0-9]{2}\/[0-9]{4})/i,
+      // Patrón específico para el formato del pagaré: "Fecha de suscripción 24/05/2019 10:14:06"
+      /Fecha\s*de\s*suscripción\s*([0-9]{2}\/[0-9]{2}\/[0-9]{4})\s*[0-9]{2}:[0-9]{2}:[0-9]{2}/i,
+      // Patrón más general para "Fecha de suscripción" seguido de fecha
+      /Fecha\s*de\s*suscripción[\s:]*([0-9]{2}\/[0-9]{2}\/[0-9]{4})/i,
+      // Otros patrones de suscripción
+      /(?:suscripción|firmad[oa]|suscrit[oa])[\s\S]{0,50}([0-9]{2}\/[0-9]{2}\/[0-9]{4})/i,
       /(?:otorgad[oa]|celebrad[oa])[\s\S]{0,30}([0-9]{2}\/[0-9]{2}\/[0-9]{4})/i
     ];
     
@@ -2083,7 +2140,7 @@ async function extraerDatosPagare(pdfBase64) {
               const fechaEncontrada = fechaMatch[1];
               const añoEncontrado = parseInt(fechaEncontrada.split('/')[2]);
               // Verificar que sea una fecha razonable para suscripción
-              if (añoEncontrado >= 2020 && añoEncontrado <= 2030 && añoEncontrado !== 2023 && añoEncontrado !== 2024) {
+              if (añoEncontrado >= 2020 && añoEncontrado <= 2030) {
                 fechaSuscripcionEncontrada = fechaEncontrada;
                 console.log(`[extraerDatosPagare] Fecha suscripción encontrada por contexto "${contextWord}":`, fechaSuscripcionEncontrada);
                 break;
@@ -2096,16 +2153,26 @@ async function extraerDatosPagare(pdfBase64) {
           datosExtraidos.fechaSuscripcion = fechaSuscripcionEncontrada;
         } else if (fechasRelevantes.length > 0) {
           // Solo como último recurso, tomar la fecha más antigua de las relevantes
-          const fechasOrdenadas = fechasRelevantes.map(f => {
-            const partes = f[1].split('/');
-            return {
-              fecha: f[1],
-              timestamp: new Date(parseInt(partes[2]), parseInt(partes[1]) - 1, parseInt(partes[0])).getTime()
-            };
-          }).sort((a, b) => a.timestamp - b.timestamp);
+          // Pero excluir fechas que claramente son de vencimiento (2024 en adelante)
+          const fechasSuscripcionCandidatas = fechasRelevantes.filter(f => {
+            const año = parseInt(f[1].split('/')[2]);
+            return año < 2024; // Fechas de suscripción suelen ser anteriores a 2024
+          });
           
-          datosExtraidos.fechaSuscripcion = fechasOrdenadas[0].fecha;
-          console.log('[extraerDatosPagare] Fecha suscripción por fallback (más antigua):', datosExtraidos.fechaSuscripcion);
+          if (fechasSuscripcionCandidatas.length > 0) {
+            const fechasOrdenadas = fechasSuscripcionCandidatas.map(f => {
+              const partes = f[1].split('/');
+              return {
+                fecha: f[1],
+                timestamp: new Date(parseInt(partes[2]), parseInt(partes[1]) - 1, parseInt(partes[0])).getTime()
+              };
+            }).sort((a, b) => a.timestamp - b.timestamp);
+            
+            datosExtraidos.fechaSuscripcion = fechasOrdenadas[0].fecha;
+            console.log('[extraerDatosPagare] Fecha suscripción por fallback (más antigua, pre-2024):', datosExtraidos.fechaSuscripcion);
+          } else {
+            console.warn('[extraerDatosPagare] No se encontraron fechas candidatas para suscripción (pre-2024)');
+          }
         }
       }
       
